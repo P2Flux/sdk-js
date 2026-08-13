@@ -26,6 +26,10 @@ export type ChargeStatus =
   | 'TRANSACTION_REVERTED'
   | 'INTERNAL_ERROR'
   | 'NETWORK_ERROR'
+  // Infrastructure protection: the request was turned away before any money could move, so the
+  // subscription is untouched and the call is safe to repeat.
+  | 'RATE_LIMITED'
+  | 'CONCURRENCY_LIMIT'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -103,6 +107,8 @@ const ACTIONS: Record<string, MerchantAction> = {
   TRANSACTION_REVERTED: 'RETRY_LATER',
   INTERNAL_ERROR: 'RETRY_LATER',
   NETWORK_ERROR: 'RETRY_LATER',
+  RATE_LIMITED: 'RETRY_LATER',
+  CONCURRENCY_LIMIT: 'RETRY_LATER',
 }
 
 export type P2FluxOptions = {
