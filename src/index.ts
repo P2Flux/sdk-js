@@ -21,6 +21,8 @@ export type ChargeStatus =
   | 'SUBSCRIPTION_EXPIRED'
   | 'INVALID_SUBSCRIPTION'
   | 'INVALID_REQUEST'
+  | 'AMOUNT_OUT_OF_BOUNDS'
+  | 'PERIOD_OUT_OF_BOUNDS'
   | 'RPC_ERROR'
   | 'RELAYER_ERROR'
   | 'TRANSACTION_REVERTED'
@@ -107,6 +109,10 @@ const ACTIONS: Record<string, MerchantAction> = {
   SUBSCRIPTION_EXPIRED: 'STOP_SUBSCRIPTION',
   INVALID_SUBSCRIPTION: 'INVALID_REQUEST',
   INVALID_REQUEST: 'INVALID_REQUEST',
+  // Permanent: the amount or period is outside what the terms can express. Fix the request, do not
+  // retry it - the fallback used to call these retryable, which reads as an outage to a merchant.
+  AMOUNT_OUT_OF_BOUNDS: 'INVALID_REQUEST',
+  PERIOD_OUT_OF_BOUNDS: 'INVALID_REQUEST',
   RPC_ERROR: 'RETRY_LATER',
   RELAYER_ERROR: 'RETRY_LATER',
   TRANSACTION_REVERTED: 'RETRY_LATER',
