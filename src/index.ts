@@ -30,6 +30,11 @@ export type ChargeStatus =
   // subscription is untouched and the call is safe to repeat.
   | 'RATE_LIMITED'
   | 'CONCURRENCY_LIMIT'
+  // Gas could not be priced, or moved above what this subscription authorized. Nothing was spent
+  // and nothing about the subscription changed: the charge waits for better conditions.
+  | 'GAS_TOO_HIGH'
+  | 'GAS_QUOTE_UNAVAILABLE'
+  | 'GAS_FEE_TOO_HIGH'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -109,6 +114,9 @@ const ACTIONS: Record<string, MerchantAction> = {
   NETWORK_ERROR: 'RETRY_LATER',
   RATE_LIMITED: 'RETRY_LATER',
   CONCURRENCY_LIMIT: 'RETRY_LATER',
+  GAS_TOO_HIGH: 'RETRY_LATER',
+  GAS_QUOTE_UNAVAILABLE: 'RETRY_LATER',
+  GAS_FEE_TOO_HIGH: 'RETRY_LATER',
 }
 
 export type P2FluxOptions = {
