@@ -41,6 +41,12 @@ export type ChargeStatus =
   | 'GAS_TOO_HIGH'
   | 'GAS_QUOTE_UNAVAILABLE'
   | 'GAS_FEE_TOO_HIGH'
+  /* Operator-side limits, not payment outcomes: refused before anything was broadcast, so nothing
+   * was spent and the subscription is untouched. Retry later; there is nothing a customer can do
+   * about a gas spike or an exhausted relayer budget. */
+  | 'RELAYER_TX_COST_TOO_HIGH'
+  | 'RELAYER_BUDGET_EXCEEDED'
+  | 'RELAYER_NOT_READY'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -132,6 +138,9 @@ const ACTIONS: Record<string, MerchantAction> = {
   GAS_TOO_HIGH: 'RETRY_LATER',
   GAS_QUOTE_UNAVAILABLE: 'RETRY_LATER',
   GAS_FEE_TOO_HIGH: 'RETRY_LATER',
+  RELAYER_TX_COST_TOO_HIGH: 'RETRY_LATER',
+  RELAYER_BUDGET_EXCEEDED: 'RETRY_LATER',
+  RELAYER_NOT_READY: 'RETRY_LATER',
 }
 
 export type P2FluxOptions = {
