@@ -47,6 +47,9 @@ export type ChargeStatus =
   | 'RELAYER_TX_COST_TOO_HIGH'
   | 'RELAYER_BUDGET_EXCEEDED'
   | 'RELAYER_NOT_READY'
+  /* The service is at its own capacity - not this caller's fault and not permanent. Distinct from
+   * RATE_LIMITED, which is per caller: this one means come back shortly, not "you asked too often". */
+  | 'RPC_BUSY'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -141,6 +144,7 @@ const ACTIONS: Record<string, MerchantAction> = {
   RELAYER_TX_COST_TOO_HIGH: 'RETRY_LATER',
   RELAYER_BUDGET_EXCEEDED: 'RETRY_LATER',
   RELAYER_NOT_READY: 'RETRY_LATER',
+  RPC_BUSY: 'RETRY_LATER',
 }
 
 export type P2FluxOptions = {
