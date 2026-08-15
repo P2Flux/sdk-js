@@ -14,6 +14,10 @@
 export type ChargeStatus =
   | 'CHARGED'
   | 'ALREADY_CHARGED'
+  /* The money moved and the chain has not settled yet. Not a failure and not a success: change
+   * nothing, keep the period open, and ask again in a few seconds. Never send a second charge. */
+  | 'CONFIRMING'
+  | 'PAYMENT_CONFIRMING'
   | 'NOT_DUE'
   | 'INSUFFICIENT_BALANCE'
   | 'INSUFFICIENT_ALLOWANCE'
@@ -40,6 +44,9 @@ export type ChargeStatus =
 
 export type MerchantAction =
   | 'SUCCESS'
+  /* Distinct from RETRY_LATER on purpose: nothing went wrong, so a customer is told the payment
+   * arrived and is confirming - not that it failed. */
+  | 'WAIT'
   | 'RETRY_LATER'
   | 'CUSTOMER_ACTION_REQUIRED'
   | 'STOP_SUBSCRIPTION'
@@ -102,6 +109,8 @@ export class P2FluxError extends Error {
 const ACTIONS: Record<string, MerchantAction> = {
   CHARGED: 'SUCCESS',
   ALREADY_CHARGED: 'SUCCESS',
+  CONFIRMING: 'WAIT',
+  PAYMENT_CONFIRMING: 'WAIT',
   NOT_DUE: 'RETRY_LATER',
   INSUFFICIENT_BALANCE: 'CUSTOMER_ACTION_REQUIRED',
   INSUFFICIENT_ALLOWANCE: 'CUSTOMER_ACTION_REQUIRED',
@@ -197,7 +206,8 @@ export function createP2Flux(options: P2FluxOptions) {
         ok: status === 'CHARGED' || status === 'ALREADY_CHARGED',
         alreadyPaid: status === 'ALREADY_CHARGED',
         action,
-        retryable: action === 'RETRY_LATER',
+        // WAIT is retryable in the only sense that matters here: ask the same question again.
+        retryable: action === 'RETRY_LATER' || action === 'WAIT',
         txHash: body.tx_hash as string | undefined,
         amount: body.amount as string | undefined,
         subscriptionId: body.subscription_id as string | undefined,
