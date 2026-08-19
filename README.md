@@ -49,6 +49,30 @@ The full result contract, including every status code, is in
 [`examples/`](examples/) — a renewal worker, a single charge with every branch handled, and
 cancellation.
 
+## Refunds are the merchant's transaction
+
+A refund is a plain USDC transfer from your own wallet to the wallet that paid you. There is no
+refund contract, no relayer and no P2Flux custody in the path: P2Flux charges no refund fee, returns
+none of its original commission, and you pay the gas.
+
+```js
+const refund = await p2flux.prepareRefund({ intent, txHash }, '2500000')  // micro-USDC, integer
+// -> open your checkout at #/refund/<refund.refundToken> so your wallet can send it
+const result = await p2flux.verifyRefund({ intent, txHash }, '2500000', refundTxHash)
+if (result.refunded) markRefunded()
+else if (result.confirming) pollTheSameHashAgainLater()   // never send a second refund
+```
+
+`prepareRefund` derives the payer, the merchant, the token and the refundable maximum from the chain
+— you supply identifiers and an amount, and nothing else. There is no way to name a recipient, which
+is what keeps a refund from being a withdrawal.
+
+**P2Flux keeps no refund history.** It cannot tell you whether a payment has already been refunded,
+and calling `prepareRefund` twice will prepare two valid refunds. One refund per payment is your
+integration's rule to enforce, and the safe place is *before* preparing: reserve the order row
+atomically, then prepare. Reconciliation later uses `verifyRefund` with the original settlement, so
+the short-lived `refundToken` never needs storing.
+
 ## Cancellation is the customer's transaction
 
 P2Flux cannot revoke a customer's on-chain authority. `prepareSubscriptionCancellation()` and

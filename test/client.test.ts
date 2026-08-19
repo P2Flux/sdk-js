@@ -66,3 +66,51 @@ test('a trailing slash on apiUrl does not produce a double slash', async () => {
   await createP2Flux({ apiUrl: 'https://api.p2flux.example/', fetch: impl }).charge('p2s2.x')
   assert.equal(calls[0]!.url, 'https://api.p2flux.example/v1/charges')
 })
+
+test('a refund is prepared from identifiers alone, and the wire names are translated', async () => {
+  const { impl, calls } = answering(200, {
+    refund_token: 'p2refund1.k1.body.mac',
+    chain_id: 8453,
+    token: '0xtoken',
+    merchant: '0xmerchant',
+    payer: '0xpayer',
+    original_amount: '10.000000',
+    original_amount_units: '10000000',
+    refund_amount: '2.500000',
+    refund_amount_units: '2500000',
+    expires_at: 1_800_000_000,
+  })
+
+  const refund = await client(impl).prepareRefund({ subscription: 'p2s2.k1.body.mac', txHash: '0xabc', periodIndex: 3 }, '2500000')
+
+  assert.equal(calls[0]!.url, 'https://api.p2flux.example/v1/refunds/prepare')
+  /* Identifiers and an integer amount. Notably absent: payer, merchant, token - a caller that could
+   * name the recipient would turn a refund into a withdrawal. */
+  assert.deepEqual(calls[0]!.body, {
+    subscription: 'p2s2.k1.body.mac',
+    tx_hash: '0xabc',
+    period_index: 3,
+    amount: '2500000',
+  })
+  assert.equal(refund.payer, '0xpayer')
+  assert.equal(refund.refundAmountUnits, '2500000')
+})
+
+test('a refund that is still confirming is a result, never an exception', async () => {
+  /* Same rule as a charge in flight: the money may already have moved. A merchant loop that had to
+   * catch an exception to learn "wait" is a loop that eventually refunds the customer twice. */
+  const { impl } = answering(400, { error: 'REFUND_CONFIRMING' })
+  const result = await client(impl).verifyRefund({ intent: 'p2f1.k1.body.mac', txHash: '0xabc' }, '2500000', '0xdef')
+
+  assert.equal(result.confirming, true)
+  assert.equal(result.refunded, false)
+  assert.equal(result.action, 'WAIT')
+})
+
+test('a refund that does not match the original payment throws', async () => {
+  const { impl } = answering(400, { error: 'REFUND_TRANSACTION_MISMATCH' })
+  await assert.rejects(
+    () => client(impl).verifyRefund({ intent: 'p2f1.k1.body.mac', txHash: '0xabc' }, '2500000', '0xdef'),
+    (err: P2FluxError) => err.status === 'REFUND_TRANSACTION_MISMATCH' && err.action === 'INVALID_REQUEST',
+  )
+})

@@ -18,6 +18,17 @@ export type ChargeStatus =
    * nothing, keep the period open, and ask again in a few seconds. Never send a second charge. */
   | 'CONFIRMING'
   | 'PAYMENT_CONFIRMING'
+  /* Refunds. A refund is a transfer the MERCHANT's wallet makes directly to the buyer - P2Flux
+   * verifies it and never performs it, so these describe evidence rather than an action taken.
+   * REFUND_CONFIRMING is a waiting state exactly like PAYMENT_CONFIRMING: poll the same hash. */
+  | 'REFUNDED'
+  | 'REFUND_CONFIRMING'
+  | 'REFUND_AMOUNT_INVALID'
+  | 'REFUND_WRONG_MERCHANT'
+  | 'REFUND_TRANSACTION_MISMATCH'
+  | 'REFUND_ORIGINAL_PAYMENT_INVALID'
+  | 'INVALID_REFUND_TOKEN'
+  | 'REFUND_TOKEN_EXPIRED'
   | 'NOT_DUE'
   | 'INSUFFICIENT_BALANCE'
   | 'INSUFFICIENT_ALLOWANCE'
@@ -104,6 +115,68 @@ export type PreparedTransaction = {
   payer?: string
 }
 
+/**
+ * Which settlement is being refunded: a one-time payment, or one period of a subscription.
+ *
+ * Identifiers only. The payer, the merchant, the token and the refundable maximum are all derived
+ * from the chain by P2Flux - a caller cannot name any of them, which is what stops a refund call
+ * from being a way to send money to an address of your choosing.
+ */
+export type RefundOriginal =
+  | { intent: string; txHash: string }
+  | { subscription: string; txHash: string; periodIndex?: number }
+
+export type RefundPreparation = {
+  /**
+   * Short-lived capability for the merchant's BROWSER, to be put in the checkout fragment.
+   *
+   * Do not store it. Reconciliation later uses `verifyRefund` with the original settlement, which
+   * needs no token - keeping this one alive to work around its expiry would only add a secret at
+   * rest without buying anything.
+   */
+  refundToken: string
+  chainId: number
+  token: string
+  /** The wallet that received the original payment. The only wallet that may send this refund. */
+  merchant: string
+  /** The wallet that paid. The only possible recipient. */
+  payer: string
+  /** The commercial amount of the original payment - the refundable maximum. */
+  originalAmount: string
+  originalAmountUnits: string
+  refundAmount: string
+  refundAmountUnits: string
+  expiresAt: number
+  raw: Record<string, unknown>
+}
+
+export type RefundVerification = {
+  /** True only once the refund transfer is settled to the configured depth. */
+  refunded: boolean
+  /** True while the transfer exists but has not settled. Poll the SAME hash; never send another. */
+  confirming: boolean
+  status: ChargeStatus
+  action: MerchantAction
+  txHash?: string
+  amount?: string
+  raw: Record<string, unknown>
+}
+
+/** Wire shape: `txHash` is `tx_hash`, and the settlement key stays whatever the caller passed. */
+const refundBody = (original: RefundOriginal): Record<string, unknown> => {
+  const { txHash, periodIndex, ...rest } = original as {
+    txHash: string
+    periodIndex?: number
+    intent?: string
+    subscription?: string
+  }
+  return {
+    ...rest,
+    tx_hash: txHash,
+    ...(periodIndex === undefined ? {} : { period_index: periodIndex }),
+  }
+}
+
 export class P2FluxError extends Error {
   constructor(
     readonly status: ChargeStatus,
@@ -120,6 +193,14 @@ const ACTIONS: Record<string, MerchantAction> = {
   ALREADY_CHARGED: 'SUCCESS',
   CONFIRMING: 'WAIT',
   PAYMENT_CONFIRMING: 'WAIT',
+  REFUNDED: 'SUCCESS',
+  REFUND_CONFIRMING: 'WAIT',
+  REFUND_AMOUNT_INVALID: 'INVALID_REQUEST',
+  REFUND_WRONG_MERCHANT: 'INVALID_REQUEST',
+  REFUND_TRANSACTION_MISMATCH: 'INVALID_REQUEST',
+  REFUND_ORIGINAL_PAYMENT_INVALID: 'INVALID_REQUEST',
+  INVALID_REFUND_TOKEN: 'INVALID_REQUEST',
+  REFUND_TOKEN_EXPIRED: 'INVALID_REQUEST',
   NOT_DUE: 'RETRY_LATER',
   INSUFFICIENT_BALANCE: 'CUSTOMER_ACTION_REQUIRED',
   INSUFFICIENT_ALLOWANCE: 'CUSTOMER_ACTION_REQUIRED',
@@ -258,6 +339,84 @@ export function createP2Flux(options: P2FluxOptions) {
         data: body.data as string,
         description: body.description as string,
         payer: body.payer as string,
+      }
+    },
+
+    /**
+     * Lock the terms of a refund, so the merchant's wallet can send it.
+     *
+     * A refund is a plain USDC transfer from the merchant's own wallet to the buyer's own wallet.
+     * There is no refund contract, no relayer and no P2Flux custody in the path; P2Flux charges no
+     * refund fee and returns none of its original commission, and the merchant pays the gas.
+     *
+     * `amountUnits` is micro-USDC as an integer string - `'2500000'` for 2.50. Floats are refused,
+     * because a partial refund computed in floating point is a rounding bug waiting for an audit.
+     * The maximum is the commercial amount the buyer actually paid, so a full refund means the
+     * merchant absorbs the original P2Flux fee.
+     *
+     * **P2Flux keeps no refund history.** It cannot tell you whether this payment was already
+     * refunded, and calling this twice will happily prepare two valid refunds. Enforcing one refund
+     * per payment is your integration's job, and the safe place to do it is BEFORE this call:
+     * reserve the order row atomically, then prepare.
+     */
+    async prepareRefund(original: RefundOriginal, amountUnits: string): Promise<RefundPreparation> {
+      const body = await postOrThrow('/v1/refunds/prepare', { ...refundBody(original), amount: amountUnits })
+      return {
+        refundToken: body.refund_token as string,
+        chainId: body.chain_id as number,
+        token: body.token as string,
+        merchant: body.merchant as string,
+        payer: body.payer as string,
+        originalAmount: body.original_amount as string,
+        originalAmountUnits: body.original_amount_units as string,
+        refundAmount: body.refund_amount as string,
+        refundAmountUnits: body.refund_amount_units as string,
+        expiresAt: body.expires_at as number,
+        raw: body,
+      }
+    },
+
+    /**
+     * Did the refund actually happen, and has it settled?
+     *
+     * Takes the ORIGINAL settlement rather than the prepare token, deliberately: a refund may need
+     * reconciling hours or days later - after a crash, or a support ticket - and a fifteen-minute
+     * bearer token cannot answer that. Everything is re-derived from the chain on every call.
+     *
+     * A transaction hash is not a refund. This checks the receipt carries exactly one USDC transfer
+     * from the original merchant to the original payer for exactly this amount, matched by EVENT
+     * rather than by transaction sender - so a Safe or a smart account executing on the merchant's
+     * behalf verifies correctly.
+     *
+     * Never throws for a refund that is merely still confirming: that comes back as
+     * `confirming: true`, and the correct response is to poll this same hash.
+     */
+    async verifyRefund(
+      original: RefundOriginal,
+      amountUnits: string,
+      refundTxHash: string,
+    ): Promise<RefundVerification> {
+      const { httpStatus, body } = await post('/v1/refunds/verify', {
+        ...refundBody(original),
+        refund_amount: amountUnits,
+        refund_tx_hash: refundTxHash,
+      })
+      const status = ((body.status as string) ?? (body.error as string) ?? 'INTERNAL_ERROR') as ChargeStatus
+
+      /* Confirming is not an error, whatever the HTTP status says. A merchant loop that had to
+       * catch an exception to learn "wait a moment" is a loop that eventually refunds twice. */
+      if (httpStatus >= 400 && status !== 'REFUND_CONFIRMING') {
+        throw new P2FluxError(status, ACTIONS[status] ?? 'RETRY_LATER', body)
+      }
+
+      return {
+        refunded: status === 'REFUNDED',
+        confirming: status === 'REFUND_CONFIRMING',
+        status,
+        action: ((body.action as MerchantAction) ?? ACTIONS[status] ?? 'RETRY_LATER') as MerchantAction,
+        txHash: body.tx_hash as string | undefined,
+        amount: body.amount as string | undefined,
+        raw: body,
       }
     },
 
