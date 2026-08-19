@@ -21,6 +21,12 @@ export type ChargeStatus =
   /* Refunds. A refund is a transfer the MERCHANT's wallet makes directly to the buyer - P2Flux
    * verifies it and never performs it, so these describe evidence rather than an action taken.
    * REFUND_CONFIRMING is a waiting state exactly like PAYMENT_CONFIRMING: poll the same hash. */
+  /* Recovery. PAYMENT_NOT_FOUND is a statement about one block height, never a permanent one:
+   * the contract does not enforce an intent's expiry, so a slow wallet can still settle after it
+   * and a later call will find the payment. Never record it as "never paid". */
+  | 'PAYMENT_NOT_FOUND'
+  | 'PAYMENT_RECOVERY_INCONSISTENT'
+  | 'RECOVERY_UNAVAILABLE'
   | 'REFUNDED'
   | 'REFUND_CONFIRMING'
   | 'REFUND_AMOUNT_INVALID'
@@ -122,6 +128,22 @@ export type PreparedTransaction = {
  * from the chain by P2Flux - a caller cannot name any of them, which is what stops a refund call
  * from being a way to send money to an address of your choosing.
  */
+export type RecoveredPayment = {
+  /** True when a settling transaction exists on chain and was located. */
+  found: boolean
+  /** The transaction that settled this intent. Present whenever `found`. */
+  txHash?: string
+  /** True only once that transaction is settled to the required depth. */
+  valid: boolean
+  /** `PAYMENT_CONFIRMING` while it is still settling, `PAYMENT_NOT_FOUND` when nothing has. */
+  status?: ChargeStatus
+  action: MerchantAction
+  amount?: string
+  /** The block the answer was computed at. A not-found is only true as of this height. */
+  asOfBlock?: string
+  raw: Record<string, unknown>
+}
+
 export type RefundOriginal =
   | { intent: string; txHash: string }
   | { subscription: string; txHash: string; periodIndex?: number }
@@ -193,6 +215,9 @@ const ACTIONS: Record<string, MerchantAction> = {
   ALREADY_CHARGED: 'SUCCESS',
   CONFIRMING: 'WAIT',
   PAYMENT_CONFIRMING: 'WAIT',
+  PAYMENT_NOT_FOUND: 'RETRY_LATER',
+  PAYMENT_RECOVERY_INCONSISTENT: 'RETRY_LATER',
+  RECOVERY_UNAVAILABLE: 'RETRY_LATER',
   REFUNDED: 'SUCCESS',
   REFUND_CONFIRMING: 'WAIT',
   REFUND_AMOUNT_INVALID: 'INVALID_REQUEST',
@@ -326,6 +351,46 @@ export function createP2Flux(options: P2FluxOptions) {
         periodEnd: body.period_end as string | null,
         nextPeriodAt: body.next_period_at as string | null,
         allowanceUnlimited: body.allowance_unlimited as boolean,
+        raw: body,
+      }
+    },
+
+    /**
+     * Find the transaction that settled an intent, when its hash was lost.
+     *
+     * The failure this is for: the checkout window dies between the wallet returning a hash and
+     * your server recording it. The money has moved, your order looks unpaid, and you have no
+     * transaction to reconcile against. Give this the intent and it finds the settlement on chain -
+     * you supply no hash and no hint of any kind, and the match is bound to the exact payment the
+     * intent describes, so it can never hand you somebody else's transaction.
+     *
+     * Safe to call on a schedule for any order you are unsure about; it is pure reads and
+     * idempotent. It also works long after the intent expired, because expiry stops a payment being
+     * STARTED and says nothing about one that already happened.
+     *
+     * `found: false` with `PAYMENT_NOT_FOUND` means no settlement existed as of the block this was
+     * computed at - NOT that the buyer will never pay. The contract does not enforce your intent's
+     * expiry, so a slow wallet can still settle afterwards and a later call will find it. Stop
+     * polling when your own business rules say to, never on the strength of one not-found.
+     */
+    async recoverPayment(intent: string): Promise<RecoveredPayment> {
+      const { httpStatus, body } = await post('/v1/payments/recover', { intent })
+      const status = ((body.code as string) ?? (body.error as string) ?? undefined) as ChargeStatus | undefined
+
+      /* A payment that has not settled, and one that is still confirming, are both ANSWERS. Only a
+       * broken request or a broken deployment throws. */
+      if (httpStatus >= 400 && status !== 'PAYMENT_NOT_FOUND' && status !== 'PAYMENT_CONFIRMING') {
+        throw new P2FluxError(status ?? 'INTERNAL_ERROR', ACTIONS[status ?? ''] ?? 'RETRY_LATER', body)
+      }
+
+      return {
+        found: body.found === true,
+        txHash: body.tx_hash as string | undefined,
+        valid: body.valid === true,
+        status,
+        action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS') as MerchantAction,
+        amount: body.amount as string | undefined,
+        asOfBlock: body.as_of_block as string | undefined,
         raw: body,
       }
     },

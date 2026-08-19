@@ -10,7 +10,7 @@
  *   if (result.ok) markRenewalPaid()          // covers CHARGED and ALREADY_CHARGED
  *   else if (result.action === 'STOP_SUBSCRIPTION') cancelLocally()
  */
-export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY';
+export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY';
 export type MerchantAction = 'SUCCESS' | 'WAIT' | 'RETRY_LATER' | 'CUSTOMER_ACTION_REQUIRED' | 'STOP_SUBSCRIPTION' | 'INVALID_REQUEST';
 export type ChargeResult = {
     status: ChargeStatus;
@@ -59,6 +59,21 @@ export type PreparedTransaction = {
  * from the chain by P2Flux - a caller cannot name any of them, which is what stops a refund call
  * from being a way to send money to an address of your choosing.
  */
+export type RecoveredPayment = {
+    /** True when a settling transaction exists on chain and was located. */
+    found: boolean;
+    /** The transaction that settled this intent. Present whenever `found`. */
+    txHash?: string;
+    /** True only once that transaction is settled to the required depth. */
+    valid: boolean;
+    /** `PAYMENT_CONFIRMING` while it is still settling, `PAYMENT_NOT_FOUND` when nothing has. */
+    status?: ChargeStatus;
+    action: MerchantAction;
+    amount?: string;
+    /** The block the answer was computed at. A not-found is only true as of this height. */
+    asOfBlock?: string;
+    raw: Record<string, unknown>;
+};
 export type RefundOriginal = {
     intent: string;
     txHash: string;
@@ -129,6 +144,25 @@ export declare function createP2Flux(options: P2FluxOptions): {
     charge(subscriptionRef: string): Promise<ChargeResult>;
     /** Current state, read straight from the chain. Use it to reconcile after downtime. */
     status(subscriptionRef: string): Promise<SubscriptionStatus>;
+    /**
+     * Find the transaction that settled an intent, when its hash was lost.
+     *
+     * The failure this is for: the checkout window dies between the wallet returning a hash and
+     * your server recording it. The money has moved, your order looks unpaid, and you have no
+     * transaction to reconcile against. Give this the intent and it finds the settlement on chain -
+     * you supply no hash and no hint of any kind, and the match is bound to the exact payment the
+     * intent describes, so it can never hand you somebody else's transaction.
+     *
+     * Safe to call on a schedule for any order you are unsure about; it is pure reads and
+     * idempotent. It also works long after the intent expired, because expiry stops a payment being
+     * STARTED and says nothing about one that already happened.
+     *
+     * `found: false` with `PAYMENT_NOT_FOUND` means no settlement existed as of the block this was
+     * computed at - NOT that the buyer will never pay. The contract does not enforce your intent's
+     * expiry, so a slow wallet can still settle afterwards and a later call will find it. Stop
+     * polling when your own business rules say to, never on the strength of one not-found.
+     */
+    recoverPayment(intent: string): Promise<RecoveredPayment>;
     /** Calldata that cancels this one subscription. Only the customer's wallet can send it. */
     prepareSubscriptionCancellation(subscriptionRef: string): Promise<PreparedTransaction>;
     /**

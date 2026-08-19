@@ -49,6 +49,27 @@ The full result contract, including every status code, is in
 [`examples/`](examples/) — a renewal worker, a single charge with every branch handled, and
 cancellation.
 
+## A lost callback is recoverable
+
+If your checkout window dies between the wallet returning a transaction hash and your server
+recording it, the payment happened and your order looks unpaid. `recoverPayment` finds it again from
+the intent alone:
+
+```js
+const recovered = await p2flux.recoverPayment(intent)
+if (recovered.found && recovered.valid) markPaid(recovered.txHash)
+else if (recovered.found) pollAgainLater()          // still confirming; you have the hash now
+else keepWaiting()                                   // nothing settled AS OF recovered.asOfBlock
+```
+
+You supply the intent and nothing else — no hash, no hint. The match is bound to the exact payment
+that intent describes, so it can never return somebody else's transaction, and it works long after
+the intent expired: expiry stops a payment being *started*, not one that already happened.
+
+`PAYMENT_NOT_FOUND` is a statement about one block height, not a verdict. The contract does not
+enforce your intent's expiry, so a slow wallet can still settle afterwards and a later call will
+find it — stop polling on your own business rules, never on one not-found.
+
 ## Refunds are the merchant's transaction
 
 A refund is a plain USDC transfer from your own wallet to the wallet that paid you. There is no

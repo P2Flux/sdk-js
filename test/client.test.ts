@@ -114,3 +114,45 @@ test('a refund that does not match the original payment throws', async () => {
     (err: P2FluxError) => err.status === 'REFUND_TRANSACTION_MISMATCH' && err.action === 'INVALID_REQUEST',
   )
 })
+
+test('a lost payment is recovered from the intent alone', async () => {
+  const { impl, calls } = answering(200, { found: true, valid: true, tx_hash: `0x${'ab'.repeat(32)}`, amount: '10.000000' })
+  const result = await client(impl).recoverPayment('p2f1.k1.body.mac')
+
+  assert.equal(calls[0]!.url, 'https://api.p2flux.example/v1/payments/recover')
+  // The intent and nothing else: no hash, no hint, nothing a caller could get wrong.
+  assert.deepEqual(calls[0]!.body, { intent: 'p2f1.k1.body.mac' })
+  assert.equal(result.found, true)
+  assert.equal(result.txHash, `0x${'ab'.repeat(32)}`)
+  assert.equal(result.valid, true)
+})
+
+test('nothing settled yet is a result, and never a permanent verdict', async () => {
+  /* The contract does not enforce an intent's expiry, so a slow wallet can still settle after this
+   * answer. A merchant loop must be able to read it without catching an exception, and must not be
+   * encouraged to write the order off. */
+  const { impl } = answering(200, { found: false, code: 'PAYMENT_NOT_FOUND', as_of_block: '45688490' })
+  const result = await client(impl).recoverPayment('p2f1.k1.body.mac')
+
+  assert.equal(result.found, false)
+  assert.equal(result.status, 'PAYMENT_NOT_FOUND')
+  assert.equal(result.action, 'RETRY_LATER')
+  assert.equal(result.asOfBlock, '45688490', 'the answer names the block it was true at')
+})
+
+test('a recovered payment still confirming reports the hash, not an error', async () => {
+  const { impl } = answering(200, { found: true, valid: false, code: 'PAYMENT_CONFIRMING', tx_hash: `0x${'cd'.repeat(32)}` })
+  const result = await client(impl).recoverPayment('p2f1.k1.body.mac')
+
+  assert.equal(result.found, true)
+  assert.equal(result.txHash, `0x${'cd'.repeat(32)}`, 'losing the hash here is what recovery exists to prevent')
+  assert.equal(result.action, 'WAIT')
+})
+
+test('a deployment that cannot recover throws rather than reporting "no payment"', async () => {
+  const { impl } = answering(503, { error: 'RECOVERY_UNAVAILABLE' })
+  await assert.rejects(
+    () => client(impl).recoverPayment('p2f1.k1.body.mac'),
+    (err: P2FluxError) => err.status === 'RECOVERY_UNAVAILABLE',
+  )
+})
