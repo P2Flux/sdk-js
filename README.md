@@ -6,7 +6,7 @@ dependencies, `fetch` injectable for tests and for hosts with their own HTTP sta
 This repository is the **canonical source** for the JS SDK.
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.1.0     # not on npm yet
+npm install github:P2Flux/sdk-js#v0.3.0     # not on npm yet
 ```
 
 ```ts
