@@ -469,7 +469,11 @@ export function createP2Flux(options: P2FluxOptions) {
       const status = ((body.status as string) ?? (body.error as string) ?? 'INTERNAL_ERROR') as ChargeStatus
 
       /* Confirming is not an error, whatever the HTTP status says. A merchant loop that had to
-       * catch an exception to learn "wait a moment" is a loop that eventually refunds twice. */
+       * catch an exception to learn "wait a moment" is a loop that eventually refunds twice.
+       *
+       * The API answers 409 for this as of 2026-08-21, matching PAYMENT_CONFIRMING; it previously
+       * answered 400. The check stays keyed on the CODE rather than the status so both answers
+       * behave identically and an older deployment keeps working. */
       if (httpStatus >= 400 && status !== 'REFUND_CONFIRMING') {
         throw new P2FluxError(status, ACTIONS[status] ?? 'RETRY_LATER', body)
       }
@@ -479,8 +483,10 @@ export function createP2Flux(options: P2FluxOptions) {
         confirming: status === 'REFUND_CONFIRMING',
         status,
         action: ((body.action as MerchantAction) ?? ACTIONS[status] ?? 'RETRY_LATER') as MerchantAction,
-        txHash: body.tx_hash as string | undefined,
-        amount: body.amount as string | undefined,
+        /* The verify response names these `refund_*`. Reading `tx_hash`/`amount` here - the keys the
+         * CHARGE response uses - meant both were silently undefined on every successful refund. */
+        txHash: body.refund_tx_hash as string | undefined,
+        amount: body.refund_amount as string | undefined,
         raw: body,
       }
     },

@@ -98,13 +98,40 @@ test('a refund is prepared from identifiers alone, and the wire names are transl
 
 test('a refund that is still confirming is a result, never an exception', async () => {
   /* Same rule as a charge in flight: the money may already have moved. A merchant loop that had to
-   * catch an exception to learn "wait" is a loop that eventually refunds the customer twice. */
-  const { impl } = answering(400, { error: 'REFUND_CONFIRMING' })
+   * catch an exception to learn "wait" is a loop that eventually refunds the customer twice.
+   *
+   * 409 is what the API answers as of 2026-08-21, matching PAYMENT_CONFIRMING. */
+  const { impl } = answering(409, { error: 'REFUND_CONFIRMING', action: 'WAIT' })
   const result = await client(impl).verifyRefund({ intent: 'p2f1.k1.body.mac', txHash: '0xabc' }, '2500000', '0xdef')
 
   assert.equal(result.confirming, true)
   assert.equal(result.refunded, false)
   assert.equal(result.action, 'WAIT')
+})
+
+test('a confirming refund from an older deployment still reads as confirming', async () => {
+  // The same code arrived as 400 before the status was corrected. Keyed on the code, so both work.
+  const { impl } = answering(400, { error: 'REFUND_CONFIRMING' })
+  const result = await client(impl).verifyRefund({ intent: 'p2f1.k1.body.mac', txHash: '0xabc' }, '2500000', '0xdef')
+
+  assert.equal(result.confirming, true)
+  assert.equal(result.action, 'WAIT')
+})
+
+test('a settled refund reports the transaction it settled with', async () => {
+  /* These come back as refund_tx_hash/refund_amount. Reading tx_hash/amount - the keys the CHARGE
+   * response uses - left both undefined on every successful refund. */
+  const { impl } = answering(200, {
+    status: 'REFUNDED',
+    refund_tx_hash: `0x${'ab'.repeat(32)}`,
+    refund_amount: '2500000',
+    original_amount: '10000000',
+  })
+  const result = await client(impl).verifyRefund({ intent: 'p2f1.k1.body.mac', txHash: '0xabc' }, '2500000', '0xdef')
+
+  assert.equal(result.refunded, true)
+  assert.equal(result.txHash, `0x${'ab'.repeat(32)}`)
+  assert.equal(result.amount, '2500000')
 })
 
 test('a refund that does not match the original payment throws', async () => {
