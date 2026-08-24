@@ -9,10 +9,23 @@ This repository is the **canonical source** for the JS SDK.
 npm install github:P2Flux/sdk-js#v0.3.0     # not on npm yet
 ```
 
+## Scope
+
+This client covers the **renewal-job surface**: `charge`, `status`, `recoverPayment`, refunds and
+cancellation preparation. It deliberately does not implement intent creation
+(`POST /v1/payments`), settlement verification (`POST /v1/payments/verify`) or subscription setup
+(`POST /v1/subscriptions`) — from a JS backend, call those REST endpoints directly (they are plain
+unauthenticated JSON POSTs; see [p2flux.com/docs](https://p2flux.com/docs/)). The PHP SDK
+(`p2flux/p2flux-php`) implements the full merchant-server surface. The buyer-side wallet
+experience is the hosted checkout, not an SDK.
+
+Production API: `https://api.p2flux.com` (Base Mainnet — real money). Test:
+`https://api-test.p2flux.com` (Base Sepolia).
+
 ```ts
 import { createP2Flux } from '@p2flux/sdk'
 
-const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.example', timeoutMs: 30_000 })
+const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.com', timeoutMs: 30_000 })
 
 const result = await p2flux.charge(ref)   // never throws; inspect result.status / result.action
 const state  = await p2flux.status(ref)   // throws P2FluxError on a bad reference
