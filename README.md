@@ -6,32 +6,64 @@ dependencies, `fetch` injectable for tests and for hosts with their own HTTP sta
 This repository is the **canonical source** for the JS SDK.
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.3.0     # not on npm yet
+npm install github:P2Flux/sdk-js#v0.4.0     # not on npm yet
 ```
 
 ## Scope
 
-This client covers the **renewal-job surface**: `charge`, `status`, `recoverPayment`, refunds and
-cancellation preparation. It deliberately does not implement intent creation
-(`POST /v1/payments`), settlement verification (`POST /v1/payments/verify`) or subscription setup
-(`POST /v1/subscriptions`) — from a JS backend, call those REST endpoints directly (they are plain
-unauthenticated JSON POSTs; see [p2flux.com/docs](https://p2flux.com/docs/)). The PHP SDK
-(`p2flux/p2flux-php`) implements the full merchant-server surface. The buyer-side wallet
-experience is the hosted checkout, not an SDK.
+This client covers the **complete public V1 merchant/server API** — the same surface as the PHP
+SDK (`p2flux/p2flux-php`). One-time payments, verification with settlement receipts, lost-payment
+recovery, subscription setup / finalize / charge / status, cancellation, allowance revocation and
+refunds are all first-class typed methods: no raw REST calls are needed for a normal integration.
+The buyer-side wallet experience is the hosted checkout, not an SDK.
 
-Production API: `https://api.p2flux.com` (Base Mainnet — real money). Test:
-`https://api-test.p2flux.com` (Base Sepolia).
+Production API: `https://api.p2flux.com` (Base Mainnet — **real money**). Test:
+`https://api-test.p2flux.com` (Base Sepolia, faucet USDC — integrate here first).
 
 ```ts
 import { createP2Flux } from '@p2flux/sdk'
 
 const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.com', timeoutMs: 30_000 })
 
-const result = await p2flux.charge(ref)   // never throws; inspect result.status / result.action
-const state  = await p2flux.status(ref)   // throws P2FluxError on a bad reference
-const cancel = await p2flux.prepareSubscriptionCancellation(ref)
-const stop   = await p2flux.prepareAllowanceRevocation()
+// One-time: create → hosted checkout → verify
+const payment = await p2flux.createPayment({ recipient: merchantWallet, amount: '12.50' })
+sendBuyerTo(`https://pay.p2flux.com/#/pay/${payment.intent}`)
+const verdict = await p2flux.verifyPayment(payment.intent, txHash)
+if (verdict.valid) markPaid(verdict.txHash, verdict.settlementReceipt)
+
+// Recurring: create → hosted checkout authorizes → finalize → charge from YOUR renewal job
+const setup = await p2flux.createSubscription({ recipient: merchantWallet, amount: '5.00', period: 30 * 24 * 3600 })
+const sub = await p2flux.finalizeSubscription(setup.setupToken, payer, signature)
+const result = await p2flux.charge(sub.subscription)   // never throws; inspect status / action
 ```
+
+### Method ↔ operation map
+
+| Operation | Method | PHP equivalent |
+|---|---|---|
+| `POST /v1/payments` | `createPayment` | `createPayment` |
+| `POST /v1/payments/resolve` | `resolvePayment` | `resolvePayment` |
+| `POST /v1/payments/verify` | `verifyPayment` | `verifyPayment` |
+| `POST /v1/payments/recover` | `recoverPayment` | `recoverPayment` |
+| `POST /v1/subscriptions` | `createSubscription` | `createSubscription` |
+| `POST /v1/subscriptions/resolve` | `resolveSubscription` | `resolveSubscription` |
+| `POST /v1/subscriptions/finalize` | `finalizeSubscription` | `finalizeSubscription` |
+| `POST /v1/charges` | `charge` | `charge` |
+| `POST /v1/subscriptions/status` | `status` | `status` |
+| `POST /v1/subscriptions/revoke/session` | `createCancellationSession` | `createCancellationSession` |
+| `POST /v1/subscriptions/revoke/prepare` | `prepareSubscriptionCancellation` | `prepareSubscriptionCancellation` |
+| `POST /v1/allowances/revoke/prepare` | `prepareAllowanceRevocation` | `prepareAllowanceRevocation` |
+| `POST /v1/refunds/prepare` | `prepareRefund` | `prepareRefund` |
+| `POST /v1/refunds/resolve` | `resolveRefund` | `resolveRefund` |
+| `POST /v1/refunds/verify` | `verifyRefund` | `verifyRefund` |
+
+`/health` is an operational liveness endpoint, not a merchant operation; `/metrics` and `/ready`
+are loopback-only. None of the three belongs in an SDK.
+
+**Parity is tested, not promised.** `test/parity.test.ts` holds the checked-in list of all 15
+public V1 merchant operations and fails if any stops being reachable through the SDK; the PHP SDK
+and P2Flux/core carry the same guard. A new public operation added to the API turns every list
+red until both SDKs support it.
 
 ## The one rule worth knowing
 
@@ -59,8 +91,9 @@ The full result contract, including every status code, is in
 
 ## Examples
 
-[`examples/`](examples/) — a renewal worker, a single charge with every branch handled, and
-cancellation.
+[`examples/`](examples/) — a one-time payment end to end (`one-time.ts`), a subscription from
+setup to cancellation (`subscription-setup.ts`), a refund (`refund.ts`), a renewal worker, a
+single charge with every branch handled, and cancellation.
 
 ## A lost callback is recoverable
 

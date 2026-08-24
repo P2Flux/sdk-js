@@ -1,14 +1,18 @@
 /**
- * P2Flux JS/TS SDK - a thin, dependency-free client over the HTTP API.
+ * P2Flux JS/TS SDK - a thin, dependency-free client over the complete public V1 merchant API.
  *
  * P2Flux executes payments. Your application owns the subscription lifecycle: when a renewal is
  * due, who the customer is, what happens after a failure. There is deliberately no scheduler,
  * no polling and no state here - call `charge()` from your existing renewal job.
  *
- *   const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.example' })
+ *   const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.com' })   // production: real USDC
  *   const result = await p2flux.charge(subscriptionRef)
  *   if (result.ok) markRenewalPaid()          // covers CHARGED and ALREADY_CHARGED
  *   else if (result.action === 'STOP_SUBSCRIPTION') cancelLocally()
+ *
+ * Every public V1 merchant/server operation has a method here - one-time payments, verification
+ * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
+ * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
 
 export type ChargeStatus =
@@ -67,6 +71,27 @@ export type ChargeStatus =
   /* The service is at its own capacity - not this caller's fault and not permanent. Distinct from
    * RATE_LIMITED, which is per caller: this one means come back shortly, not "you asked too often". */
   | 'RPC_BUSY'
+  /* Token validity. A capability that is malformed, expired or presented to the wrong endpoint
+   * never becomes valid: fix the integration, do not retry the call. */
+  | 'INVALID_INTENT'
+  | 'INTENT_EXPIRED'
+  | 'INVALID_REFERENCE'
+  | 'INVALID_SETUP_TOKEN'
+  | 'SETUP_TOKEN_EXPIRED'
+  | 'INVALID_CANCEL_TOKEN'
+  | 'CANCEL_TOKEN_EXPIRED'
+  | 'TERMS_MISMATCH'
+  /* Verification verdicts: statements about the chain, delivered as `valid: false` codes. */
+  | 'PERMISSION_NOT_FOUND'
+  | 'TRANSACTION_NOT_FOUND'
+  | 'PAYMENT_ALREADY_PROCESSED'
+  | 'WRONG_SPENDER'
+  | 'WRONG_TOKEN'
+  | 'INVALID_EXTRA_DATA'
+  /* Finalize: the customer's signature could not be accepted as presented. */
+  | 'INVALID_SIGNATURE'
+  | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE'
+  | 'UNSUPPORTED_SIGNATURE_FORMAT'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -199,6 +224,157 @@ const refundBody = (original: RefundOriginal): Record<string, unknown> => {
   }
 }
 
+/** Terms for a one-time payment: who gets paid, and how much USDC (decimal string, "12.50"). */
+export type PaymentTerms = {
+  recipient: string
+  amount: string
+}
+
+export type PaymentIntent = {
+  /** Signed capability for this exact payment. Put it in the checkout link fragment: `#/pay/<intent>`. */
+  intent: string
+  /** The on-chain payment reference (bytes32) the settlement will carry. */
+  reference: string
+  amount: string
+  /** Unix seconds. Expiry stops a payment being STARTED; it never makes a settlement unverifiable. */
+  expiresAt: number
+  /** What a checkout needs to call the splitter. Nothing secret. */
+  pay: {
+    chainId: number
+    splitter: string
+    token: string
+    recipient: string
+    amountUnits: string
+    reference: string
+  }
+  raw: Record<string, unknown>
+}
+
+/** The authoritative terms a checkout should display, read back from an intent. */
+export type ResolvedPayment = {
+  recipient: string
+  amount: string
+  amountUnits: string
+  token: string
+  splitter: string
+  chainId: number
+  reference: string
+  expiresAt: number
+  /** How many confirmations a verify will wait for; null when the API leaves it to its default. */
+  confirmationsRequired: number | null
+  raw: Record<string, unknown>
+}
+
+/**
+ * A verification verdict - a real discriminated union, so `if (result.valid)` narrows.
+ *
+ * `valid: false` is a 200-level ANSWER, not an exception: `PAYMENT_CONFIRMING` while the
+ * transaction settles (ask again in a few seconds), `TRANSACTION_REVERTED` / `TERMS_MISMATCH` /
+ * `WRONG_TOKEN` and friends when the transaction does not pay this intent. Only a broken request
+ * or the API being unreachable throws.
+ */
+export type PaymentVerification =
+  | {
+      valid: true
+      txHash: string
+      reference?: string
+      amount?: string
+      blockNumber?: string
+      blockHash?: string
+      /**
+       * Sealed proof of this CONFIRMED verdict, valid ~10 minutes. Present it on a repeat verify of
+       * the same intent + hash and the API answers without re-reading the chain. Store it only as a
+       * short-lived optimization - never as the payment record.
+       */
+      settlementReceipt?: string
+      raw: Record<string, unknown>
+    }
+  | {
+      valid: false
+      code: ChargeStatus
+      /** Local guidance for the code: WAIT means poll the same hash, INVALID_REQUEST means stop. */
+      action: MerchantAction
+      raw: Record<string, unknown>
+    }
+
+/** Terms for a subscription: USDC per period, period length in seconds, optional end (unix). */
+export type SubscriptionTerms = {
+  recipient: string
+  amount: string
+  period: number
+  end?: number
+}
+
+export type SubscriptionSetup = {
+  /** Signed setup token. Put it in the checkout link fragment: `#/subscribe/<setup_token>`. */
+  setupToken: string
+  /** Unix seconds - the window the customer has to authorize. */
+  expiresAt: number
+  chainId: number
+  /** The recurring contract the customer will authorize. Read from the API, never hard-coded. */
+  contract: string
+  amount: string
+  /** Ties a returned capability back to THIS checkout - compare before attaching it to an order. */
+  salt: string
+  raw: Record<string, unknown>
+}
+
+/** The authoritative terms plus the exact EIP-712 payload the customer's wallet signs. */
+export type ResolvedSubscription = {
+  recipient: string
+  amount: string
+  amountUnits: string
+  period: number
+  start: number
+  end: number
+  token: string
+  chainId: number
+  contract: string
+  salt: string
+  maxGasReimbursement: string
+  feeBps: number
+  networkFee: string
+  networkFeeUnits: string
+  networkFeeEstimate: string | null
+  expiresAt: number
+  typedData: Record<string, unknown>
+  raw: Record<string, unknown>
+}
+
+export type FinalizedSubscription = {
+  /**
+   * The charge capability (`p2s2.`). The ONE thing your system stores per subscription -
+   * encrypted at rest, never in a URL or a log. Everything else is reconstructed from the chain.
+   */
+  subscription: string
+  subscriptionId: string
+  amount: string
+  period: number
+  end?: number
+  raw: Record<string, unknown>
+}
+
+export type CancellationSession = {
+  /** Short-lived token safe to hand to the customer's BROWSER: `#/cancel/<cancel_token>`. */
+  cancelToken: string
+  expiresAt: number
+  subscriptionId: string
+  payer: string
+  raw: Record<string, unknown>
+}
+
+/** A refund token read back by the browser holding it - what a cancel/refund page displays. */
+export type ResolvedRefund = {
+  chainId: number
+  token: string
+  merchant: string
+  payer: string
+  amount: string
+  amountUnits: string
+  expiresAt: number
+  raw: Record<string, unknown>
+}
+
 export class P2FluxError extends Error {
   constructor(
     readonly status: ChargeStatus,
@@ -251,6 +427,29 @@ const ACTIONS: Record<string, MerchantAction> = {
   RELAYER_BUDGET_EXCEEDED: 'RETRY_LATER',
   RELAYER_NOT_READY: 'RETRY_LATER',
   RPC_BUSY: 'RETRY_LATER',
+  /* The API ships no `action` for these, so this local fallback is what a merchant sees. A dead or
+   * mismatched token never becomes valid by retrying - all of them are integration errors. */
+  INVALID_INTENT: 'INVALID_REQUEST',
+  INTENT_EXPIRED: 'INVALID_REQUEST',
+  INVALID_REFERENCE: 'INVALID_REQUEST',
+  INVALID_SETUP_TOKEN: 'INVALID_REQUEST',
+  SETUP_TOKEN_EXPIRED: 'INVALID_REQUEST',
+  INVALID_CANCEL_TOKEN: 'INVALID_REQUEST',
+  CANCEL_TOKEN_EXPIRED: 'INVALID_REQUEST',
+  TERMS_MISMATCH: 'INVALID_REQUEST',
+  PERMISSION_NOT_FOUND: 'INVALID_REQUEST',
+  INVALID_SIGNATURE: 'INVALID_REQUEST',
+  UNSUPPORTED_SIGNATURE_FORMAT: 'INVALID_REQUEST',
+  WRONG_SPENDER: 'INVALID_REQUEST',
+  WRONG_TOKEN: 'INVALID_REQUEST',
+  INVALID_EXTRA_DATA: 'INVALID_REQUEST',
+  // A settled intent cannot settle twice; retrying will not change the answer.
+  PAYMENT_ALREADY_PROCESSED: 'INVALID_REQUEST',
+  // The transaction may still be propagating or mining - the same question can have a new answer.
+  TRANSACTION_NOT_FOUND: 'RETRY_LATER',
+  /* The customer's contract wallet costs more to validate than the API will spend. Only the
+   * customer can fix that, by authorizing from an ordinary wallet. */
+  SIGNATURE_VALIDATION_TOO_EXPENSIVE: 'CUSTOMER_ACTION_REQUIRED',
 }
 
 export type P2FluxOptions = {
@@ -302,6 +501,157 @@ export function createP2Flux(options: P2FluxOptions) {
   }
 
   return {
+    /**
+     * Create a signed one-time payment intent.
+     *
+     * The intent is a capability for exactly this recipient and amount - nothing else can settle
+     * against it. Hand it to the buyer as a checkout link fragment (`#/pay/<intent>`); the fragment
+     * never reaches a server log or a Referer header. Store the intent with your order: verify,
+     * recovery and refunds all start from it.
+     */
+    async createPayment(terms: PaymentTerms): Promise<PaymentIntent> {
+      const body = await postOrThrow('/v1/payments', { recipient: terms.recipient, amount: terms.amount })
+      const pay = (body.pay ?? {}) as Record<string, unknown>
+      return {
+        intent: body.intent as string,
+        reference: body.reference as string,
+        amount: body.amount as string,
+        expiresAt: body.expires_at as number,
+        pay: {
+          chainId: pay.chain_id as number,
+          splitter: pay.splitter as string,
+          token: pay.token as string,
+          recipient: pay.recipient as string,
+          amountUnits: pay.amount_units as string,
+          reference: pay.reference as string,
+        },
+        raw: body,
+      }
+    },
+
+    /** The authoritative terms for a checkout to display, read back from the intent itself. */
+    async resolvePayment(intent: string): Promise<ResolvedPayment> {
+      const body = await postOrThrow('/v1/payments/resolve', { intent })
+      return {
+        recipient: body.recipient as string,
+        amount: body.amount as string,
+        amountUnits: body.amount_units as string,
+        token: body.token as string,
+        splitter: body.splitter as string,
+        chainId: body.chain_id as number,
+        reference: body.reference as string,
+        expiresAt: body.expires_at as number,
+        confirmationsRequired: (body.confirmations_required ?? null) as number | null,
+        raw: body,
+      }
+    },
+
+    /**
+     * Verify a payment against the chain. Returns a verdict, not an exception: `valid: false` with
+     * `PAYMENT_CONFIRMING` means ask again in a few seconds about the SAME hash; the other codes
+     * mean this transaction does not settle this intent. Only a malformed request, rate limiting or
+     * an unreachable API throws.
+     *
+     * Pass back the `settlementReceipt` from an earlier confirmed verdict and the repeat answer
+     * costs the API no chain reads. Verify deliberately ignores intent expiry: a settlement that
+     * happened is a fact, however late you ask about it.
+     */
+    async verifyPayment(intent: string, txHash: string, settlementReceipt?: string): Promise<PaymentVerification> {
+      const body = await postOrThrow('/v1/payments/verify', {
+        intent,
+        tx_hash: txHash,
+        ...(settlementReceipt === undefined ? {} : { settlement_receipt: settlementReceipt }),
+      })
+      if (body.valid === true) {
+        return {
+          valid: true,
+          txHash: body.tx_hash as string,
+          reference: body.reference as string | undefined,
+          amount: body.amount as string | undefined,
+          blockNumber: body.block_number as string | undefined,
+          blockHash: body.block_hash as string | undefined,
+          settlementReceipt: body.settlement_receipt as string | undefined,
+          raw: body,
+        }
+      }
+      const code = ((body.code as string) ?? 'INTERNAL_ERROR') as ChargeStatus
+      return { valid: false, code, action: ACTIONS[code] ?? 'RETRY_LATER', raw: body }
+    },
+
+    /**
+     * Create subscription terms and a signed setup token.
+     *
+     * `period` is seconds - on-chain periods are seconds, however your plans phrase it. Hand the
+     * token to the customer as `#/subscribe/<setup_token>`; their wallet authorizes, and the
+     * finalize step turns their signature into the `p2s2.` charge capability your renewal job uses.
+     * Keep the returned `salt`: it is how you prove a returned capability came from THIS checkout.
+     */
+    async createSubscription(terms: SubscriptionTerms): Promise<SubscriptionSetup> {
+      const body = await postOrThrow('/v1/subscriptions', {
+        recipient: terms.recipient,
+        amount: terms.amount,
+        period: terms.period,
+        ...(terms.end === undefined ? {} : { end: terms.end }),
+      })
+      return {
+        setupToken: body.setup_token as string,
+        expiresAt: body.expires_at as number,
+        chainId: body.chain_id as number,
+        contract: body.contract as string,
+        amount: body.amount as string,
+        salt: body.salt as string,
+        raw: body,
+      }
+    },
+
+    /** The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign. */
+    async resolveSubscription(setupToken: string): Promise<ResolvedSubscription> {
+      const body = await postOrThrow('/v1/subscriptions/resolve', { setup_token: setupToken })
+      return {
+        recipient: body.recipient as string,
+        amount: body.amount as string,
+        amountUnits: body.amount_units as string,
+        period: body.period as number,
+        start: body.start as number,
+        end: body.end as number,
+        token: body.token as string,
+        chainId: body.chain_id as number,
+        contract: body.contract as string,
+        salt: body.salt as string,
+        maxGasReimbursement: body.max_gas_reimbursement as string,
+        feeBps: body.fee_bps as number,
+        networkFee: body.network_fee as string,
+        networkFeeUnits: body.network_fee_units as string,
+        networkFeeEstimate: (body.network_fee_estimate ?? null) as string | null,
+        expiresAt: body.expires_at as number,
+        typedData: (body.typed_data ?? {}) as Record<string, unknown>,
+        raw: body,
+      }
+    },
+
+    /**
+     * Exchange the customer's EIP-712 signature for the `p2s2.` charge capability.
+     *
+     * The capability is the ONE thing your system stores per subscription - treat it like a
+     * credential: encrypted at rest, never in a URL, never in a log. Everything else about the
+     * subscription is reconstructed from the chain on demand.
+     */
+    async finalizeSubscription(setupToken: string, payer: string, signature: string): Promise<FinalizedSubscription> {
+      const body = await postOrThrow('/v1/subscriptions/finalize', {
+        setup_token: setupToken,
+        payer,
+        signature,
+      })
+      return {
+        subscription: body.subscription as string,
+        subscriptionId: body.subscription_id as string,
+        amount: body.amount as string,
+        period: body.period as number,
+        end: body.end as number | undefined,
+        raw: body,
+      }
+    },
+
     /**
      * Attempt one recurring charge. Never throws - inspect `status`/`action`. An unreachable API
      * comes back as NETWORK_ERROR / RETRY_LATER rather than an exception.
@@ -391,6 +741,23 @@ export function createP2Flux(options: P2FluxOptions) {
         action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS') as MerchantAction,
         amount: body.amount as string | undefined,
         asOfBlock: body.as_of_block as string | undefined,
+        raw: body,
+      }
+    },
+
+    /**
+     * A short-lived cancel token safe to hand to the customer's BROWSER (`#/cancel/<cancel_token>`).
+     *
+     * The `p2s2.` capability must never reach the customer's browser - it can charge them. This
+     * token can only read the subscription and prepare its cancellation, and it expires on its own.
+     */
+    async createCancellationSession(subscriptionRef: string): Promise<CancellationSession> {
+      const body = await postOrThrow('/v1/subscriptions/revoke/session', { subscription: subscriptionRef })
+      return {
+        cancelToken: body.cancel_token as string,
+        expiresAt: body.expires_at as number,
+        subscriptionId: body.subscription_id as string,
+        payer: body.payer as string,
         raw: body,
       }
     },
@@ -487,6 +854,21 @@ export function createP2Flux(options: P2FluxOptions) {
          * CHARGE response uses - meant both were silently undefined on every successful refund. */
         txHash: body.refund_tx_hash as string | undefined,
         amount: body.refund_amount as string | undefined,
+        raw: body,
+      }
+    },
+
+    /** What a refund token authorizes, read back by the page that holds it. */
+    async resolveRefund(refundToken: string): Promise<ResolvedRefund> {
+      const body = await postOrThrow('/v1/refunds/resolve', { refund_token: refundToken })
+      return {
+        chainId: body.chain_id as number,
+        token: body.token as string,
+        merchant: body.merchant as string,
+        payer: body.payer as string,
+        amount: body.amount as string,
+        amountUnits: body.amount_units as string,
+        expiresAt: body.expires_at as number,
         raw: body,
       }
     },
