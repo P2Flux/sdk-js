@@ -48,6 +48,17 @@ The `ACTIONS` map in `src/index.ts` is the complete list the client knows; anyth
 to `RETRY_LATER`. The authoritative catalogue with per-code guidance is the
 [errors page](https://p2flux.com/docs/errors.html).
 
+## The checkout handoff (subscriptions)
+
+This client's job ends at HTTP; the hosted checkout talks to your PAGE by `postMessage`. After
+`p2flux.subscription.created` delivers the capability, your page attempts the first charge with
+`charge()` and must answer the still-open popup: `p2flux.finalized` (optional `txHash` as
+`tx_hash`) on success, `p2flux.activation_failed` with a bare CODE for failures your renewal job
+will not quietly recover — the `ChargeResult.action` already makes the split
+(`CUSTOMER_ACTION_REQUIRED` and `STOP_SUBSCRIPTION` are worth reporting; for
+`RETRY_LATER`/`WAIT` send nothing). The checkout owns all customer-facing wording. Full protocol:
+[p2flux.com/docs/subscriptions.html#handoff](https://p2flux.com/docs/subscriptions.html#handoff).
+
 ## Storing the reference
 
 The `p2s2…` string is bearer authorization for charging that one subscription. Keep it in your
