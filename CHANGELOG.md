@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.5.0 - 2026-09-02
+## 0.6.0 - 2026-09-02
+
+Version 0.5.0 was never published: from this release the JS and PHP SDKs share one version number,
+so that "both SDKs at v0.6.0" means the same public protocol surface in both.
 
 ### Added
 
