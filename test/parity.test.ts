@@ -22,10 +22,13 @@ const REQUIRED_OPERATIONS = [
   '/v1/subscriptions/resolve',
   '/v1/subscriptions/finalize',
   '/v1/charges',
+  '/v1/charges/recover',
   '/v1/subscriptions/status',
   '/v1/subscriptions/revoke/session',
   '/v1/subscriptions/revoke/prepare',
   '/v1/allowances/revoke/prepare',
+  '/v1/allowances/restore/session',
+  '/v1/allowances/restore/resolve',
   '/v1/refunds/prepare',
   '/v1/refunds/resolve',
   '/v1/refunds/verify',
@@ -48,10 +51,13 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
   await p2flux.resolveSubscription('p2setup2.x')
   await p2flux.finalizeSubscription('p2setup2.x', '0x' + '55'.repeat(20), '0x00')
   await p2flux.charge('p2s2.x')
+  await p2flux.recoverCharge('p2s2.x', 3)
   await p2flux.status('p2s2.x')
   await p2flux.createCancellationSession('p2s2.x')
   await p2flux.prepareSubscriptionCancellation('p2s2.x')
   await p2flux.prepareAllowanceRevocation()
+  await p2flux.createAllowanceRestoreSession('p2s2.x')
+  await p2flux.resolveAllowanceRestore('p2approve1.x')
   await p2flux.prepareRefund({ intent: 'p2f1.x', txHash: HASH }, '1000000')
   await p2flux.resolveRefund('p2refund1.x')
   await p2flux.verifyRefund({ intent: 'p2f1.x', txHash: HASH }, '1000000', HASH)

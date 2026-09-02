@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 - 2026-09-02
+
+### Added
+
+- **`recoverCharge(ref, periodIndex, hint?)`** — the transaction that charged one recurring period.
+  `ALREADY_CHARGED` proves a period was collected and names no transaction, so a worker that lost
+  the first response held a paid period it could not attribute, audit or refund (refunds start from
+  the original settlement). The period index is required and exact: reconciliation is about one
+  specific collection, today or in a year. `found: false` is ordinary rather than an error — there
+  is no catch-up billing, so a period that was never collected is normal history — and a settlement
+  still confirming keeps its hash, the same rule `recoverPayment()` follows. The optional hint is
+  where your own records say you attempted the charge; it narrows the search and is never evidence.
+- **`createAllowanceRestoreSession(ref)`** and **`resolveAllowanceRestore(token)`** —
+  `INSUFFICIENT_ALLOWANCE` is not a dead subscription: the authorization the customer signed is
+  intact and they need one `approve()`. The session names the payer, the spender, the token and the
+  amount, and can neither charge nor revoke nor refund. Open `<checkout>/#/approve/<approveToken>`,
+  wait for `p2flux.allowance.restored`, then charge the SAME subscription again.
+
 ## 0.4.0 - 2026-08-24
 
 Complete public V1 parity. Every merchant/server operation the API exposes is now a first-class

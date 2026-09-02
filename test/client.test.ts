@@ -183,3 +183,91 @@ test('a deployment that cannot recover throws rather than reporting "no payment"
     (err: P2FluxError) => err.status === 'RECOVERY_UNAVAILABLE',
   )
 })
+
+/**
+ * Recovering a recurring settlement.
+ *
+ * The rule that matters: a period that was never collected is ordinary history - there is no
+ * catch-up billing - so "not found" is an answer rather than an exception, exactly as it is for a
+ * one-time payment. Only a broken request or a deployment that cannot search throws.
+ */
+test('recoverCharge asks for one exact period and normalizes the settlement', async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = []
+  const p2flux = createP2Flux({
+    apiUrl: 'https://api.p2flux.example',
+    fetch: (async (url: string, init: { body: string }) => {
+      calls.push({ url: String(url), body: JSON.parse(init.body) })
+      return {
+        status: 200,
+        json: async () => ({
+          found: true,
+          subscription_id: `0x${'cd'.repeat(32)}`,
+          period_index: 3,
+          tx_hash: '0xrecovered',
+          block_number: '45688490',
+          net_units: '9700000',
+          fee_units: '200000',
+          network_fee_units: '100000',
+          amount_units: '10000000',
+        }),
+      }
+    }) as unknown as typeof fetch,
+  })
+
+  const settled = await p2flux.recoverCharge('p2s2.x', 3)
+  assert.equal(settled.found, true)
+  assert.equal(settled.txHash, '0xrecovered')
+  assert.equal(settled.periodIndex, 3)
+  assert.equal(settled.amountUnits, '10000000')
+  assert.deepEqual(calls[0]!.body, { subscription: 'p2s2.x', period_index: 3 })
+
+  // A hint is optional, snake_cased on the wire, and omitted entirely when empty.
+  await p2flux.recoverCharge('p2s2.x', 3, { attemptedAt: 1700000000 })
+  assert.deepEqual(calls[1]!.body.hint, { attempted_at: 1700000000 })
+  await p2flux.recoverCharge('p2s2.x', 3, {})
+  assert.equal('hint' in (calls[2]!.body as object), false)
+})
+
+test('a period that was never collected is an answer, not a throw', async () => {
+  const p2flux = createP2Flux({
+    apiUrl: 'https://api.p2flux.example',
+    fetch: (async () => ({
+      status: 200,
+      json: async () => ({ found: false, code: 'PAYMENT_NOT_FOUND', as_of_block: '45688490' }),
+    })) as unknown as typeof fetch,
+  })
+
+  const missing = await p2flux.recoverCharge('p2s2.x', 5)
+  assert.equal(missing.found, false)
+  assert.equal(missing.status, 'PAYMENT_NOT_FOUND')
+  assert.equal(missing.action, 'RETRY_LATER', 'as of this block, and never a permanent verdict')
+  assert.equal(missing.asOfBlock, '45688490')
+})
+
+test('a deployment that cannot complete the search throws rather than reporting a miss', async () => {
+  const p2flux = createP2Flux({
+    apiUrl: 'https://api.p2flux.example',
+    fetch: (async () => ({ status: 503, json: async () => ({ error: 'RECOVERY_UNAVAILABLE' }) })) as unknown as typeof fetch,
+  })
+
+  await assert.rejects(() => p2flux.recoverCharge('p2s2.x', 3), /RECOVERY_UNAVAILABLE/)
+})
+
+test('an allowance-restore session carries no capability', async () => {
+  const p2flux = createP2Flux({
+    apiUrl: 'https://api.p2flux.example',
+    fetch: (async () => ({
+      status: 200,
+      json: async () => ({
+        approve_token: 'p2approve1.k1.body.mac',
+        expires_at: 1700000900,
+        payer: `0x${'55'.repeat(20)}`,
+        subscription_id: `0x${'cd'.repeat(32)}`,
+      }),
+    })) as unknown as typeof fetch,
+  })
+
+  const session = await p2flux.createAllowanceRestoreSession('p2s2.x')
+  assert.equal(session.approveToken, 'p2approve1.k1.body.mac')
+  assert.doesNotMatch(JSON.stringify(session), /p2s2\./)
+})

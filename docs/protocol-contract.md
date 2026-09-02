@@ -10,7 +10,7 @@ itself guarantees.
 
 ## Scope
 
-The **complete public V1 merchant/server API** — the same 15 operations as the PHP SDK
+The **complete public V1 merchant/server API** — the same 18 operations as the PHP SDK
 (`p2flux/p2flux-php`), guarded by a checked-in parity test in both repositories
 (`test/parity.test.ts` here). The buyer-side wallet experience is the hosted checkout
 (`https://pay.p2flux.com`), not an SDK.
@@ -27,10 +27,12 @@ The **complete public V1 merchant/server API** — the same 15 operations as the
 | `resolveSubscription(setupToken)` | Terms plus the exact EIP-712 `typedData` the customer signs. |
 | `finalizeSubscription(setupToken, payer, signature)` | Signature → the `p2s2.` charge capability. |
 | `charge(ref)` | Returns a `ChargeResult`; **never throws** — even an unreachable API is `NETWORK_ERROR` / `RETRY_LATER`. |
+| `recoverCharge(ref, periodIndex, hint?)` | The transaction that charged one EXACT period, for when `ALREADY_CHARGED` left you a paid period with no hash. Not-found is ordinary (no catch-up billing means a skipped period is normal history) and confirming keeps its hash; both are results, not exceptions. A `hint` narrows the search and is never evidence. |
 | `status(ref)` | Period, due-ness, allowance, revocation — read from chain. Echoes the signed `terms`; check them (and the `salt`) against what you sold before activating anything. |
 | `createCancellationSession(ref)` | Cancel token for the hosted cancel page — the capability never reaches a browser. |
 | `prepareSubscriptionCancellation(ref)` | Calldata for the customer's own `revoke()`. |
 | `prepareAllowanceRevocation()` | Calldata for the global allowance stop. |
+| `createAllowanceRestoreSession(ref)` / `resolveAllowanceRestore(token)` | `INSUFFICIENT_ALLOWANCE` is not a dead subscription: the signed authorization is intact and one `approve()` fixes it. The session is the narrowest token P2Flux issues — it cannot charge, revoke or refund — and opens `#/approve/<approveToken>`. |
 | `prepareRefund(original, amountUnits)` / `resolveRefund(refundToken)` / `verifyRefund(original, amountUnits, refundTxHash)` | Merchant-sent refunds, verified by P2Flux. |
 
 The two `prepare*` calls return unsigned calldata. P2Flux cannot revoke wallet authority and does

@@ -78,6 +78,64 @@ export type RecoveredPayment = {
     asOfBlock?: string;
     raw: Record<string, unknown>;
 };
+/**
+ * The settlement of one recurring period, recovered from the chain.
+ *
+ * `found: false` is ordinary rather than an error: there is no catch-up billing, so a period that
+ * was never collected is a normal history, and a later period having been charged says nothing
+ * about an earlier one. Like a recovered payment, a miss is a statement about one block height.
+ */
+export type RecoveredCharge = {
+    found: boolean;
+    subscriptionId?: string;
+    periodIndex?: number;
+    /** The transaction that charged this exact period. Present whenever `found`. */
+    txHash?: string;
+    blockNumber?: string;
+    payer?: string;
+    recipient?: string;
+    netUnits?: string;
+    feeUnits?: string;
+    networkFeeUnits?: string;
+    /** net + fee + networkFee: the amount the authorization signed for. Check it against your order. */
+    amountUnits?: string;
+    status?: ChargeStatus;
+    action: MerchantAction;
+    /** Only on a miss. The head this answer was computed at. */
+    asOfBlock?: string;
+    raw: Record<string, unknown>;
+};
+/** Where your own records say a charge was attempted. Narrows the search; never evidence. */
+export type ChargeRecoveryHint = {
+    attemptedAt?: number;
+    block?: number;
+};
+/**
+ * A session for restoring the token allowance one subscription needs.
+ *
+ * The narrowest token P2Flux issues: it cannot charge, cannot revoke and cannot refund. Open
+ * `<checkout>/#/approve/<approveToken>`.
+ */
+export type AllowanceRestoreSession = {
+    approveToken: string;
+    expiresAt: number;
+    payer: string;
+    subscriptionId: string;
+    raw: Record<string, unknown>;
+};
+/** What an allowance-restore session authorizes - for the browser holding it. */
+export type AllowanceRestoreTerms = {
+    chainId: number;
+    token: string;
+    /** The recurring contract. Never a value the page was opened with. */
+    spender: string;
+    payer: string;
+    subscriptionId: string;
+    /** The signed amount plus the gas reimbursement the next charge may add. */
+    requiredUnits: string;
+    expiresAt: number;
+    raw: Record<string, unknown>;
+};
 export type RefundOriginal = {
     intent: string;
     txHash: string;
@@ -347,6 +405,39 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * polling when your own business rules say to, never on the strength of one not-found.
      */
     recoverPayment(intent: string): Promise<RecoveredPayment>;
+    /**
+     * The transaction that charged one recurring period, when its hash was lost.
+     *
+     * `ALREADY_CHARGED` proves a period was collected and names no transaction: P2Flux stores
+     * nothing, so the hash lives only in the contract's log. Without it a paid period cannot be
+     * attributed to an order, audited, or refunded - refunds start from the original settlement.
+     *
+     * The period index is required and exact. There is no "current period" form, because you are
+     * reconciling one specific collection - today, or a year from now - and the answer must not
+     * move under you. Take it from the charge result or from `status()`.
+     *
+     * A `hint` (your own attempt time or block) narrows the search and can never turn a miss into a
+     * hit. Omitting it is always safe.
+     */
+    recoverCharge(subscriptionRef: string, periodIndex: number, hint?: ChargeRecoveryHint): Promise<RecoveredCharge>;
+    /**
+     * A session for restoring the token allowance one subscription needs.
+     *
+     * `INSUFFICIENT_ALLOWANCE` is not a dead subscription: the authorization the customer signed is
+     * intact and you can still collect. What ran short is the ERC-20 allowance, and the fix is one
+     * `approve()` from the customer's own wallet - no new signature, no new subscription. Hand them
+     * `<checkout>/#/approve/<approveToken>`, wait for `p2flux.allowance.restored`, then charge the
+     * SAME subscription again.
+     */
+    createAllowanceRestoreSession(subscriptionRef: string): Promise<AllowanceRestoreSession>;
+    /**
+     * Read an allowance-restore session back: what to approve, and who must approve it.
+     *
+     * Browser-side, like the other resolve calls. The transaction is the customer's own standard
+     * ERC-20 `approve()`, and the spender comes from here rather than from anything the page was
+     * opened with.
+     */
+    resolveAllowanceRestore(approveToken: string): Promise<AllowanceRestoreTerms>;
     /**
      * A short-lived cancel token safe to hand to the customer's BROWSER (`#/cancel/<cancel_token>`).
      *
