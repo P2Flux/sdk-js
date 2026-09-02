@@ -3,10 +3,13 @@
 Zero-dependency JavaScript/TypeScript client for the P2Flux payments API. One file, no runtime
 dependencies, `fetch` injectable for tests and for hosts with their own HTTP stack.
 
-This repository is the **canonical source** for the JS SDK.
+This repository is the **canonical source** for the JS SDK. The full integration guide is
+[`docs/guide.md`](docs/guide.md); the call-and-result contract is
+[`docs/protocol-contract.md`](docs/protocol-contract.md). Version numbers are shared with the PHP
+SDK: both are v0.6.0 and expose the same eighteen public operations.
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.4.0     # not on npm yet
+npm install github:P2Flux/sdk-js#v0.6.0     # not on npm yet
 ```
 
 ## Scope
@@ -35,6 +38,9 @@ if (verdict.valid) markPaid(verdict.txHash, verdict.settlementReceipt)
 const setup = await p2flux.createSubscription({ recipient: merchantWallet, amount: '5.00', period: 30 * 24 * 3600 })
 const sub = await p2flux.finalizeSubscription(setup.setupToken, payer, signature)
 const result = await p2flux.charge(sub.subscription)   // never throws; inspect status / action
+
+// Lost the response? ALREADY_CHARGED proves the period was collected and names no transaction.
+const settled = await p2flux.recoverCharge(sub.subscription, result.periodIndex ?? 0)
 ```
 
 ### Method ↔ operation map
@@ -49,10 +55,13 @@ const result = await p2flux.charge(sub.subscription)   // never throws; inspect 
 | `POST /v1/subscriptions/resolve` | `resolveSubscription` | `resolveSubscription` |
 | `POST /v1/subscriptions/finalize` | `finalizeSubscription` | `finalizeSubscription` |
 | `POST /v1/charges` | `charge` | `charge` |
+| `POST /v1/charges/recover` | `recoverCharge` | `recoverCharge` |
 | `POST /v1/subscriptions/status` | `status` | `status` |
 | `POST /v1/subscriptions/revoke/session` | `createCancellationSession` | `createCancellationSession` |
 | `POST /v1/subscriptions/revoke/prepare` | `prepareSubscriptionCancellation` | `prepareSubscriptionCancellation` |
 | `POST /v1/allowances/revoke/prepare` | `prepareAllowanceRevocation` | `prepareAllowanceRevocation` |
+| `POST /v1/allowances/restore/session` | `createAllowanceRestoreSession` | `createAllowanceRestoreSession` |
+| `POST /v1/allowances/restore/resolve` | `resolveAllowanceRestore` | `resolveAllowanceRestore` |
 | `POST /v1/refunds/prepare` | `prepareRefund` | `prepareRefund` |
 | `POST /v1/refunds/resolve` | `resolveRefund` | `resolveRefund` |
 | `POST /v1/refunds/verify` | `verifyRefund` | `verifyRefund` |
