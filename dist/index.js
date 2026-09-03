@@ -224,6 +224,7 @@ export function createP2Flux(options) {
                 amount: terms.amount,
                 period: terms.period,
                 ...(terms.end === undefined ? {} : { end: terms.end }),
+                ...(terms.allowance === undefined ? {} : { allowance: terms.allowance }),
             });
             return {
                 setupToken: body.setup_token,
@@ -449,6 +450,7 @@ export function createP2Flux(options) {
                 payer: body.payer,
                 subscriptionId: body.subscription_id,
                 requiredUnits: body.required_units,
+                approveUnits: body.approve_units ?? null,
                 expiresAt: body.expires_at,
                 raw: body,
             };

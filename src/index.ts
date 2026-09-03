@@ -224,6 +224,8 @@ export type AllowanceRestoreTerms = {
   subscriptionId: string
   /** The signed amount plus the gas reimbursement the next charge may add. */
   requiredUnits: string
+  /** What to approve, in base units; null means unlimited. The setup's own mode, kept on repair. */
+  approveUnits: string | null
   expiresAt: number
   raw: Record<string, unknown>
 }
@@ -357,11 +359,26 @@ export type PaymentVerification =
     }
 
 /** Terms for a subscription: USDC per period, period length in seconds, optional end (unix). */
+/**
+ * How much ERC-20 allowance the hosted checkout asks the customer's wallet for.
+ *
+ *   'unlimited'     one approval for the life of the subscription. The default.
+ *   'until_end'     enough for every period up to `end`; needs an end date.
+ *   { periods: N }  enough for N charges (1..1200); your restore flow asks again after that.
+ *
+ * Whatever you choose, the allowance only reaches the recurring contract, which moves nothing the
+ * customer's signed authorization does not permit. The mode bounds how much a broken contract
+ * could ever reach, at the cost of a wallet prompt when it runs out.
+ */
+export type AllowanceMode = 'unlimited' | 'until_end' | { periods: number }
+
 export type SubscriptionTerms = {
   recipient: string
   amount: string
   period: number
   end?: number
+  /** Standing allowance the checkout asks for. Omit for unlimited. */
+  allowance?: AllowanceMode
 }
 
 export type SubscriptionSetup = {
@@ -651,6 +668,7 @@ export function createP2Flux(options: P2FluxOptions) {
         amount: terms.amount,
         period: terms.period,
         ...(terms.end === undefined ? {} : { end: terms.end }),
+        ...(terms.allowance === undefined ? {} : { allowance: terms.allowance }),
       })
       return {
         setupToken: body.setup_token as string,
@@ -894,6 +912,7 @@ export function createP2Flux(options: P2FluxOptions) {
         payer: body.payer as string,
         subscriptionId: body.subscription_id as string,
         requiredUnits: body.required_units as string,
+        approveUnits: (body.approve_units as string | null | undefined) ?? null,
         expiresAt: body.expires_at as number,
         raw: body,
       }

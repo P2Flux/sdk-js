@@ -6,10 +6,10 @@ dependencies, `fetch` injectable for tests and for hosts with their own HTTP sta
 This repository is the **canonical source** for the JS SDK. The full integration guide is
 [`docs/guide.md`](docs/guide.md); the call-and-result contract is
 [`docs/protocol-contract.md`](docs/protocol-contract.md). Version numbers are shared with the PHP
-SDK: both are v0.6.0 and expose the same eighteen public operations.
+SDK: both are v0.6.1 and expose the same eighteen public operations.
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.6.0     # not on npm yet
+npm install github:P2Flux/sdk-js#v0.6.1     # not on npm yet
 ```
 
 ## Scope

@@ -1,10 +1,10 @@
 # P2Flux JavaScript SDK — integration guide
 
-`@p2flux/sdk` v0.6.0. A thin, zero-dependency client over the P2Flux HTTP API: it normalizes result
+`@p2flux/sdk` v0.6.1. A thin, zero-dependency client over the P2Flux HTTP API: it normalizes result
 codes and nothing else. No scheduler, no storage, no retry loops — your application owns all three.
 
-The PHP SDK (`p2flux/p2flux-php`, also v0.6.0) covers the identical public protocol surface. Both
-SDKs share one version number from this release on, so "both at v0.6.0" means the same eighteen
+The PHP SDK (`p2flux/p2flux-php`, also v0.6.1) covers the identical public protocol surface. Both
+SDKs share one version number from this release on, so "both at v0.6.1" means the same eighteen
 operations, the same semantics and the same security model in both languages.
 
 - [Installation](#installation)
@@ -18,7 +18,7 @@ operations, the same semantics and the same security model in both languages.
 - [Refunds](#refunds)
 - [Security](#security)
 - [Errors and retries](#errors-and-retries)
-- [Migrating to v0.6.0](#migrating-to-v060)
+- [Migrating to v0.6.1](#migrating-to-v060)
 
 ## Installation
 
@@ -28,7 +28,7 @@ own `fetch`. ESM only, TypeScript types included, no runtime dependencies.
 Not on npm yet. Install from the repository by tag, and pin the exact tag:
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.6.0
+npm install github:P2Flux/sdk-js#v0.6.1
 ```
 
 ### Basic client
@@ -145,6 +145,11 @@ your renewal job      charge()   -> every later period, when YOUR schedule says 
 ```ts
 // Setup. `period` is in seconds. Keep the salt with the pending order.
 const setup = await p2flux.createSubscription({ recipient: merchantWallet, amount: '5.00', period: 30 * 86400 })
+
+// Optional: bound the standing allowance the checkout asks for. The default is unlimited, which
+// means renewals never need the wallet again. `{ periods: 12 }` asks for twelve charges' worth
+// and your restore flow (below) asks again when it runs out; 'until_end' needs an `end` date.
+// const setup = await p2flux.createSubscription({ ..., allowance: { periods: 12 } })
 pending.salt = setup.salt
 const url = `https://pay-test.p2flux.com/#/subscribe/${encodeURIComponent(setup.setupToken)}`
 
@@ -372,13 +377,13 @@ Record the refund in your own system only after `refunded`.
 | `action: 'INVALID_REQUEST'` | Do not retry. Fix the stored reference or the request. |
 | `P2FluxError` with `NETWORK_ERROR` | The request never reached the API. Retry; treat as unknown, not as declined. |
 
-## Migrating to v0.6.0
+## Migrating to v0.6.1
 
 **No change is required** for an existing integration. Every method that existed in v0.4.0 keeps its
 name, arguments and return shape.
 
-- The version jumps from 0.4.0 to 0.6.0. 0.5.0 was prepared and never published; from this release
-  the JS and PHP SDKs share one version number, so that both at v0.6.0 means the same public
+- The version jumps from 0.4.0 to 0.6.1. 0.5.0 was prepared and never published; from this release
+  the JS and PHP SDKs share one version number, so that both at v0.6.1 means the same public
   protocol surface in both.
 - New, opt-in: `recoverCharge()`, `createAllowanceRestoreSession()`, `resolveAllowanceRestore()`,
   with the `RecoveredCharge`, `ChargeRecoveryHint`, `AllowanceRestoreSession` and
