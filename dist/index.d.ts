@@ -205,8 +205,14 @@ export type NetworkFeeQuote = {
     quotedNetworkFeeUnits: string;
     /** The ceiling that price may not exceed. */
     maxNetworkFeeUnits: string;
-    /** Flat P2Flux fee for the gas service. Zero outside one-time payments. */
-    gasServiceFeeUnits: string;
+    /**
+     * The fixed network fee on a one-time payment, in base units. Zero outside one-time payments.
+     *
+     * MERCHANT-funded: it comes out of the amount, like the percentage fee, and is paid to the gas
+     * treasury - the same arrangement a subscription has. It is not part of `buyerTotalUnits`; a
+     * buyer is debited the price plus the quoted network fee and never a P2Flux fee on top.
+     */
+    fixedNetworkFeeUnits: string;
     /** Price plus fees plus the payment itself, for a one-time payment. */
     buyerTotalUnits?: string;
     quotedAt: number;
@@ -220,7 +226,8 @@ export type PaymentAccounting = {
     paymentUnits: string;
     paymentFeeUnits: string;
     networkFeeUnits: string;
-    gasServiceFeeUnits: string;
+    /** Merchant-funded, out of the amount. Not part of `buyerTotalUnits`. */
+    fixedNetworkFeeUnits: string;
     merchantNetUnits: string;
     buyerTotalUnits: string;
     payer?: string;
@@ -268,7 +275,7 @@ export type SponsoredPaymentResult = {
     txHash: string;
     reference: string;
     networkFeeUnits: string;
-    gasServiceFeeUnits: string;
+    fixedNetworkFeeUnits: string;
     buyerTotalUnits: string;
     raw: Record<string, unknown>;
 };
@@ -283,7 +290,7 @@ export type Capabilities = {
         symbol: string;
         decimals: number;
         gasPaymentModes: GasPaymentMode[];
-        gasServiceFeeUnits: string;
+        fixedNetworkFeeUnits: string;
         operations: Record<string, boolean>;
         /** Revoking a recurring authorization is always the payer's own transaction. */
         zeroNativeRevoke: boolean;

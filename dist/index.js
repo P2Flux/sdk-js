@@ -118,7 +118,7 @@ const ACTIONS = {
 const networkFeeQuote = (raw) => ({
     quotedNetworkFeeUnits: raw.quoted_network_fee_units,
     maxNetworkFeeUnits: raw.max_network_fee_units,
-    gasServiceFeeUnits: raw.gas_service_fee_units,
+    fixedNetworkFeeUnits: raw.fixed_network_fee_units,
     buyerTotalUnits: raw.buyer_total_units,
     quotedAt: raw.quoted_at,
     expiresAt: raw.expires_at,
@@ -232,7 +232,7 @@ export function createP2Flux(options) {
                 txHash: body.tx_hash,
                 reference: body.reference,
                 networkFeeUnits: body.network_fee_units,
-                gasServiceFeeUnits: body.gas_service_fee_units,
+                fixedNetworkFeeUnits: body.fixed_network_fee_units,
                 buyerTotalUnits: body.buyer_total_units,
                 raw: body,
             };
@@ -273,7 +273,7 @@ export function createP2Flux(options) {
                     symbol: token.symbol,
                     decimals: token.decimals,
                     gasPaymentModes: token.gas_payment_modes,
-                    gasServiceFeeUnits: token.gas_service_fee_units,
+                    fixedNetworkFeeUnits: token.fixed_network_fee_units,
                     operations: (token.operations ?? {}),
                     zeroNativeRevoke: Boolean(token.zero_native_revoke),
                 })),
