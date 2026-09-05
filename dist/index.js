@@ -114,6 +114,22 @@ const ACTIONS = {
      * settlement up, never to send another one. */
     SPONSORSHIP_CONFIRMING: 'WAIT',
 };
+/**
+ * The accounting block, in the SDK's camelCase.
+ *
+ * Declared as a type since 0.7.0 and, until this was caught, never actually produced - so the
+ * figures the fee correction is about reached callers only through `raw`. Mapped here, and asserted
+ * field by field in the core's wire-parity suite.
+ */
+const paymentAccounting = (raw) => ({
+    paymentUnits: raw.payment_units,
+    paymentFeeUnits: raw.payment_fee_units,
+    networkFeeUnits: raw.network_fee_units,
+    fixedNetworkFeeUnits: raw.fixed_network_fee_units,
+    merchantNetUnits: raw.merchant_net_units,
+    buyerTotalUnits: raw.buyer_total_units,
+    ...(raw.payer === undefined ? {} : { payer: raw.payer }),
+});
 /** The wire shape of a quote, in the SDK's camelCase. */
 const networkFeeQuote = (raw) => ({
     quotedNetworkFeeUnits: raw.quoted_network_fee_units,
@@ -234,6 +250,10 @@ export function createP2Flux(options) {
                 networkFeeUnits: body.network_fee_units,
                 fixedNetworkFeeUnits: body.fixed_network_fee_units,
                 buyerTotalUnits: body.buyer_total_units,
+                ...(body.native_gas_spent_wei === undefined
+                    ? {}
+                    : { nativeGasSpentWei: body.native_gas_spent_wei }),
+                ...(body.block_number === undefined ? {} : { blockNumber: body.block_number }),
                 raw: body,
             };
         },
@@ -305,6 +325,12 @@ export function createP2Flux(options) {
                     blockNumber: body.block_number,
                     blockHash: body.block_hash,
                     settlementReceipt: body.settlement_receipt,
+                    ...(body.accounting === undefined
+                        ? {}
+                        : { accounting: paymentAccounting(body.accounting) }),
+                    ...(body.gas_payment_mode === undefined
+                        ? {}
+                        : { gasPaymentMode: body.gas_payment_mode }),
                     raw: body,
                 };
             }

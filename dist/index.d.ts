@@ -277,6 +277,9 @@ export type SponsoredPaymentResult = {
     networkFeeUnits: string;
     fixedNetworkFeeUnits: string;
     buyerTotalUnits: string;
+    /** What the transaction actually cost P2Flux, for reconciliation. The buyer paid the quote. */
+    nativeGasSpentWei?: string;
+    blockNumber?: string;
     raw: Record<string, unknown>;
 };
 /** What a deployment can actually do, per token and per operation. */
@@ -318,6 +321,12 @@ export type PaymentVerification = {
      * short-lived optimization - never as the payment record.
      */
     settlementReceipt?: string;
+    /**
+     * Every unit of this payment, read off the chain. Present on a sponsored settlement, where a
+     * merchant reconciles what it funded against what the buyer paid; absent on older API builds.
+     */
+    accounting?: PaymentAccounting;
+    gasPaymentMode?: GasPaymentMode;
     raw: Record<string, unknown>;
 } | {
     valid: false;

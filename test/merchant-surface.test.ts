@@ -388,3 +388,83 @@ test('a signup that never asked for a sponsorship reports none', async () => {
   )
   assert.equal(finalized.sponsorship, undefined)
 })
+
+test('a verified sponsored payment exposes the accounting, not just the raw body', async () => {
+  /* `PaymentAccounting` was a declared type that nothing produced: the figures the fee correction
+   * is about reached callers only through `raw`, while the CHANGELOG advertised them as a block.
+   * The numbers below are the corrected one-time economics on 1.000000 with a 0.004078 quote. */
+  const { impl } = answering(200, {
+    valid: true,
+    tx_hash: HASH,
+    reference: `0x${'ab'.repeat(32)}`,
+    amount: '1.000000',
+    gas_payment_mode: 'payment_token',
+    accounting: {
+      payment_units: '1000000',
+      payment_fee_units: '10000',
+      network_fee_units: '4078',
+      fixed_network_fee_units: '100000',
+      merchant_net_units: '890000',
+      buyer_total_units: '1004078',
+      payer: '0x' + '55'.repeat(20),
+    },
+  })
+
+  const verified = await client(impl).verifyPayment('p2f1.k1.body.mac', HASH)
+  assert.equal(verified.valid, true)
+  if (!verified.valid) return
+
+  assert.equal(verified.gasPaymentMode, 'payment_token')
+  assert.deepEqual(verified.accounting, {
+    paymentUnits: '1000000',
+    paymentFeeUnits: '10000',
+    networkFeeUnits: '4078',
+    fixedNetworkFeeUnits: '100000',
+    merchantNetUnits: '890000',
+    buyerTotalUnits: '1004078',
+    payer: '0x' + '55'.repeat(20),
+  })
+  // The merchant funds both fees out of the amount; the buyer pays the price and the network fee.
+  assert.equal(
+    BigInt(verified.accounting!.merchantNetUnits) +
+      BigInt(verified.accounting!.paymentFeeUnits) +
+      BigInt(verified.accounting!.fixedNetworkFeeUnits),
+    BigInt(verified.accounting!.paymentUnits),
+  )
+  assert.equal(
+    BigInt(verified.accounting!.buyerTotalUnits) - BigInt(verified.accounting!.networkFeeUnits),
+    BigInt(verified.accounting!.paymentUnits),
+  )
+})
+
+test('a native payment carries no accounting block and says so quietly', async () => {
+  const { impl } = answering(200, { valid: true, tx_hash: HASH, amount: '1.000000' })
+  const verified = await client(impl).verifyPayment('p2f1.k1.body.mac', HASH)
+  assert.equal(verified.valid, true)
+  if (!verified.valid) return
+  assert.equal(verified.accounting, undefined)
+  assert.equal(verified.gasPaymentMode, undefined)
+})
+
+test('a settled sponsorship reports what the relayer actually spent', async () => {
+  const { impl } = answering(200, {
+    status: 'SUBMITTED',
+    tx_hash: HASH,
+    reference: `0x${'ab'.repeat(32)}`,
+    network_fee_units: '4078',
+    fixed_network_fee_units: '100000',
+    buyer_total_units: '1004078',
+    block_number: '46425707',
+    native_gas_spent_wei: '31337000000',
+  })
+  const result = await client(impl).sponsorPayment({
+    intent: 'p2f1.k1.body.mac',
+    quote: 'p2gas1.k1.body.mac',
+    payer: '0x' + '55'.repeat(20),
+    signature: '0x' + 'cd'.repeat(65),
+  })
+  assert.equal(result.buyerTotalUnits, '1004078')
+  assert.equal(result.fixedNetworkFeeUnits, '100000')
+  assert.equal(result.nativeGasSpentWei, '31337000000')
+  assert.equal(result.blockNumber, '46425707')
+})

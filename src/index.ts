@@ -400,6 +400,9 @@ export type SponsoredPaymentResult = {
   networkFeeUnits: string
   fixedNetworkFeeUnits: string
   buyerTotalUnits: string
+  /** What the transaction actually cost P2Flux, for reconciliation. The buyer paid the quote. */
+  nativeGasSpentWei?: string
+  blockNumber?: string
   raw: Record<string, unknown>
 }
 
@@ -444,6 +447,12 @@ export type PaymentVerification =
        * short-lived optimization - never as the payment record.
        */
       settlementReceipt?: string
+      /**
+       * Every unit of this payment, read off the chain. Present on a sponsored settlement, where a
+       * merchant reconciles what it funded against what the buyer paid; absent on older API builds.
+       */
+      accounting?: PaymentAccounting
+      gasPaymentMode?: GasPaymentMode
       raw: Record<string, unknown>
     }
   | {
@@ -674,6 +683,23 @@ export type SubscriptionSponsorship = {
   networkFeeAuthorization: Record<string, unknown>
 }
 
+/**
+ * The accounting block, in the SDK's camelCase.
+ *
+ * Declared as a type since 0.7.0 and, until this was caught, never actually produced - so the
+ * figures the fee correction is about reached callers only through `raw`. Mapped here, and asserted
+ * field by field in the core's wire-parity suite.
+ */
+const paymentAccounting = (raw: Record<string, unknown>): PaymentAccounting => ({
+  paymentUnits: raw.payment_units as string,
+  paymentFeeUnits: raw.payment_fee_units as string,
+  networkFeeUnits: raw.network_fee_units as string,
+  fixedNetworkFeeUnits: raw.fixed_network_fee_units as string,
+  merchantNetUnits: raw.merchant_net_units as string,
+  buyerTotalUnits: raw.buyer_total_units as string,
+  ...(raw.payer === undefined ? {} : { payer: raw.payer as string }),
+})
+
 /** The wire shape of a quote, in the SDK's camelCase. */
 const networkFeeQuote = (raw: Record<string, unknown>): NetworkFeeQuote => ({
   quotedNetworkFeeUnits: raw.quoted_network_fee_units as string,
@@ -803,6 +829,10 @@ export function createP2Flux(options: P2FluxOptions) {
         networkFeeUnits: body.network_fee_units as string,
         fixedNetworkFeeUnits: body.fixed_network_fee_units as string,
         buyerTotalUnits: body.buyer_total_units as string,
+        ...(body.native_gas_spent_wei === undefined
+          ? {}
+          : { nativeGasSpentWei: body.native_gas_spent_wei as string }),
+        ...(body.block_number === undefined ? {} : { blockNumber: body.block_number as string }),
         raw: body,
       }
     },
@@ -884,6 +914,12 @@ export function createP2Flux(options: P2FluxOptions) {
           blockNumber: body.block_number as string | undefined,
           blockHash: body.block_hash as string | undefined,
           settlementReceipt: body.settlement_receipt as string | undefined,
+          ...(body.accounting === undefined
+            ? {}
+            : { accounting: paymentAccounting(body.accounting as Record<string, unknown>) }),
+          ...(body.gas_payment_mode === undefined
+            ? {}
+            : { gasPaymentMode: body.gas_payment_mode as GasPaymentMode }),
           raw: body,
         }
       }
