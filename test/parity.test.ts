@@ -32,6 +32,10 @@ const REQUIRED_OPERATIONS = [
   '/v1/refunds/prepare',
   '/v1/refunds/resolve',
   '/v1/refunds/verify',
+  // Paying the network fee in the payment currency.
+  '/v1/capabilities',
+  '/v1/payments/sponsor',
+  '/v1/allowances/restore/submit',
 ]
 
 test('every public V1 merchant operation is reachable through the SDK', async () => {
@@ -61,6 +65,14 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
   await p2flux.prepareRefund({ intent: 'p2f1.x', txHash: HASH }, '1000000')
   await p2flux.resolveRefund('p2refund1.x')
   await p2flux.verifyRefund({ intent: 'p2f1.x', txHash: HASH }, '1000000', HASH)
+  await p2flux.capabilities()
+  await p2flux.sponsorPayment({ intent: 'p2f1.x', quote: 'p2gas1.x', payer: '0x' + '55'.repeat(20), signature: '0x00' })
+  await p2flux.submitAllowanceRestore({
+    approveToken: 'p2approve1.x',
+    quote: 'p2gas1.x',
+    permitSignature: '0x00',
+    networkFeeSignature: '0x00',
+  })
 
   assert.deepEqual([...seen].sort(), [...REQUIRED_OPERATIONS].sort())
 })
