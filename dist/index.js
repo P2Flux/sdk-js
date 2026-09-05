@@ -337,9 +337,20 @@ export function createP2Flux(options) {
                 raw: body,
             };
         },
-        /** The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign. */
-        async resolveSubscription(setupToken) {
-            const body = await postOrThrow('/v1/subscriptions/resolve', { setup_token: setupToken });
+        /**
+         * The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign.
+         *
+         * `gasPaymentMode: 'payment_token'` with a `payer` is for a customer holding no native currency:
+         * instead of sending an approval they sign one, and this prices the transaction P2Flux will send
+         * for them. Both fields or neither - the price is for one specific wallet's allowance, which is
+         * why the mode is asked for here rather than when the subscription was created.
+         */
+        async resolveSubscription(setupToken, options = {}) {
+            const sponsored = options.gasPaymentMode === 'payment_token' && options.payer !== undefined;
+            const body = await postOrThrow('/v1/subscriptions/resolve', {
+                setup_token: setupToken,
+                ...(sponsored ? { gas_payment_mode: options.gasPaymentMode, payer: options.payer } : {}),
+            });
             return {
                 recipient: body.recipient,
                 amount: body.amount,
@@ -358,6 +369,15 @@ export function createP2Flux(options) {
                 networkFeeEstimate: (body.network_fee_estimate ?? null),
                 expiresAt: body.expires_at,
                 typedData: (body.typed_data ?? {}),
+                ...(body.sponsorship_quote === undefined
+                    ? {}
+                    : {
+                        sponsorship: {
+                            quote: networkFeeQuote(body.sponsorship_quote),
+                            allowancePermit: body.allowance_permit,
+                            networkFeeAuthorization: body.network_fee_authorization,
+                        },
+                    }),
                 raw: body,
             };
         },
@@ -368,18 +388,43 @@ export function createP2Flux(options) {
          * credential: encrypted at rest, never in a URL, never in a log. Everything else about the
          * subscription is reconstructed from the chain on demand.
          */
-        async finalizeSubscription(setupToken, payer, signature) {
+        async finalizeSubscription(setupToken, payer, signature, 
+        /* For a customer with no native currency: the quote and the two signatures from `resolve`.
+         * The capability is minted before any of this is spent, so a sponsorship that fails comes
+         * back in `sponsorship` rather than as an error - the subscription is real either way. */
+        sponsorship) {
             const body = await postOrThrow('/v1/subscriptions/finalize', {
                 setup_token: setupToken,
                 payer,
                 signature,
+                ...(sponsorship
+                    ? {
+                        sponsorship: {
+                            quote: sponsorship.quote,
+                            permit_signature: sponsorship.permitSignature,
+                            network_fee_signature: sponsorship.networkFeeSignature,
+                            ...(sponsorship.permitNonce === undefined ? {} : { permit_nonce: sponsorship.permitNonce }),
+                        },
+                    }
+                    : {}),
             });
+            const outcome = body.sponsorship;
             return {
                 subscription: body.subscription,
                 subscriptionId: body.subscription_id,
                 amount: body.amount,
                 period: body.period,
                 end: body.end,
+                ...(outcome === undefined
+                    ? {}
+                    : {
+                        sponsorship: {
+                            status: outcome.status,
+                            txHash: outcome.tx_hash,
+                            code: outcome.code,
+                            raw: outcome,
+                        },
+                    }),
                 raw: body,
             };
         },

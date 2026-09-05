@@ -14,6 +14,14 @@
 - **`capabilities()`** — what a deployment actually supports, per token and per operation. Ask
   before offering a buyer the option: a token that is technically capable is not the same as a
   network P2Flux has deployed and tested, and this reports the second.
+- **Zero-native-gas subscription signup.** `resolveSubscription(setupToken, { gasPaymentMode:
+  'payment_token', payer })` prices the allowance transaction P2Flux would send for a customer
+  holding no native currency and returns the two messages they sign; pass those to
+  `finalizeSubscription(setupToken, payer, signature, sponsorship)`. The capability is minted first
+  and costs nothing, so a sponsorship that fails is reported in `sponsorship.status` rather than
+  thrown - the subscription exists, and the allowance is still repairable from the restore flow.
+  `ALREADY_SETTLED` is a repeat of a request that already worked. The mode is asked for at resolve
+  rather than at creation because the price is for one specific wallet's allowance.
 - **Zero-native-gas allowance repair.** `resolveAllowanceRestore(token, 'payment_token')` returns
   the two messages a customer signs, and `submitAllowanceRestore({ ... })` carries them onto the chain.
   Passing `allowanceUnits: '0'` removes the allowance, which stops collection - it does not

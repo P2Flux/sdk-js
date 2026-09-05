@@ -284,3 +284,107 @@ test('a timeout aborts the request and surfaces as NETWORK_ERROR', async () => {
     (err: P2FluxError) => err.status === 'NETWORK_ERROR' && err.action === 'RETRY_LATER',
   )
 })
+
+// --- signing up with no native currency --------------------------------------
+
+test('a zero-native signup asks for the price and carries back what the customer signed', async () => {
+  const permit = { domain: { chainId: 8453 }, primaryType: 'Permit', message: { value: '0' } }
+  const fee = { domain: { chainId: 8453 }, primaryType: 'ReceiveWithAuthorization' }
+  const { impl, calls } = answering(200, {
+    recipient: '0x' + '33'.repeat(20),
+    amount: '5.000000',
+    amount_units: '5000000',
+    period: 2592000,
+    chain_id: 8453,
+    typed_data: { primaryType: 'Authorization' },
+    gas_payment_mode: 'payment_token',
+    sponsorship_quote: {
+      quoted_network_fee_units: '4000',
+      max_network_fee_units: '4000',
+      gas_service_fee_units: '0',
+      quoted_at: 1787600000,
+      expires_at: 1787600300,
+      quote: 'p2gas1.k1.body.mac',
+    },
+    allowance_permit: { typed_data: permit },
+    network_fee_authorization: { typed_data: fee },
+  })
+
+  const resolved = await client(impl).resolveSubscription('p2setup2.k1.body.mac', {
+    gasPaymentMode: 'payment_token',
+    payer: '0x' + '55'.repeat(20),
+  })
+
+  assert.deepEqual(calls[0]!.body, {
+    setup_token: 'p2setup2.k1.body.mac',
+    gas_payment_mode: 'payment_token',
+    payer: '0x' + '55'.repeat(20),
+  })
+  assert.equal(resolved.sponsorship?.quote.quotedNetworkFeeUnits, '4000')
+  assert.equal(resolved.sponsorship?.quote.quote, 'p2gas1.k1.body.mac')
+  assert.deepEqual(resolved.sponsorship?.allowancePermit, { typed_data: permit })
+})
+
+test('a mode without a payer is not a sponsored resolve, because a price needs a wallet', async () => {
+  const { impl, calls } = answering(200, { amount: '5.000000', period: 2592000, typed_data: {} })
+  const resolved = await client(impl).resolveSubscription('p2setup2.k1.body.mac', {
+    gasPaymentMode: 'payment_token',
+  })
+
+  assert.deepEqual(calls[0]!.body, { setup_token: 'p2setup2.k1.body.mac' })
+  assert.equal(resolved.sponsorship, undefined)
+})
+
+test('a sponsorship that failed leaves the subscription standing and says what happened', async () => {
+  // The capability was minted from a signature that cost nothing, so the subscription is real
+  // whatever became of the allowance - and reporting it as an error would throw that away.
+  const { impl, calls } = answering(200, {
+    subscription: 'p2s2.k1.body.mac',
+    subscription_id: HASH,
+    amount: '5.000000',
+    period: 2592000,
+    sponsorship: { status: 'FAILED', code: 'SPONSORED_PERMIT_FAILED' },
+  })
+
+  const finalized = await client(impl).finalizeSubscription(
+    'p2setup2.k1.body.mac',
+    '0x' + '55'.repeat(20),
+    '0x' + 'cd'.repeat(65),
+    {
+      quote: 'p2gas1.k1.body.mac',
+      permitSignature: '0x' + 'ab'.repeat(65),
+      networkFeeSignature: '0x' + 'ef'.repeat(65),
+      permitNonce: '3',
+    },
+  )
+
+  assert.deepEqual(calls[0]!.body, {
+    setup_token: 'p2setup2.k1.body.mac',
+    payer: '0x' + '55'.repeat(20),
+    signature: '0x' + 'cd'.repeat(65),
+    sponsorship: {
+      quote: 'p2gas1.k1.body.mac',
+      permit_signature: '0x' + 'ab'.repeat(65),
+      network_fee_signature: '0x' + 'ef'.repeat(65),
+      permit_nonce: '3',
+    },
+  })
+  assert.equal(finalized.subscription, 'p2s2.k1.body.mac', 'the subscription is the point of the call')
+  assert.equal(finalized.sponsorship?.status, 'FAILED')
+  assert.equal(finalized.sponsorship?.code, 'SPONSORED_PERMIT_FAILED')
+})
+
+test('a signup that never asked for a sponsorship reports none', async () => {
+  const { impl } = answering(200, {
+    subscription: 'p2s2.k1.body.mac',
+    subscription_id: HASH,
+    amount: '5.000000',
+    period: 2592000,
+  })
+  const finalized = await client(impl).finalizeSubscription(
+    'p2setup2.k1.body.mac',
+    '0x' + '55'.repeat(20),
+    '0x' + 'cd'.repeat(65),
+  )
+  assert.equal(finalized.sponsorship, undefined)
+})

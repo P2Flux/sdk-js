@@ -503,6 +503,8 @@ export type ResolvedSubscription = {
   networkFeeEstimate: string | null
   expiresAt: number
   typedData: Record<string, unknown>
+  /** Only when resolved in `payment_token` mode: what the customer signs instead of approving. */
+  sponsorship?: SubscriptionSponsorship
   raw: Record<string, unknown>
 }
 
@@ -516,6 +518,17 @@ export type FinalizedSubscription = {
   amount: string
   period: number
   end?: number
+  /**
+   * Only when a sponsorship was sent. The subscription exists whatever this says: the capability is
+   * minted from a signature that costs nothing, and an allowance that did not get set is repairable
+   * from the restore flow. `ALREADY_SETTLED` is a repeat of a request that already worked.
+   */
+  sponsorship?: {
+    status: 'SETTLED' | 'SPONSORSHIP_CONFIRMING' | 'ALREADY_SETTLED' | 'FAILED'
+    txHash?: string
+    code?: string
+    raw: Record<string, unknown>
+  }
   raw: Record<string, unknown>
 }
 
@@ -641,6 +654,17 @@ export type P2FluxOptions = {
   timeoutMs?: number
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch
+}
+
+/**
+ * The two messages a customer with no native currency signs to set their allowance, and the price
+ * of the transaction that carries them. Both are complete EIP-712 payloads - pass them to the
+ * wallet as they are, and add the standard's own `EIP712Domain` type.
+ */
+export type SubscriptionSponsorship = {
+  quote: NetworkFeeQuote
+  allowancePermit: Record<string, unknown>
+  networkFeeAuthorization: Record<string, unknown>
 }
 
 /** The wire shape of a quote, in the SDK's camelCase. */
@@ -887,9 +911,23 @@ export function createP2Flux(options: P2FluxOptions) {
       }
     },
 
-    /** The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign. */
-    async resolveSubscription(setupToken: string): Promise<ResolvedSubscription> {
-      const body = await postOrThrow('/v1/subscriptions/resolve', { setup_token: setupToken })
+    /**
+     * The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign.
+     *
+     * `gasPaymentMode: 'payment_token'` with a `payer` is for a customer holding no native currency:
+     * instead of sending an approval they sign one, and this prices the transaction P2Flux will send
+     * for them. Both fields or neither - the price is for one specific wallet's allowance, which is
+     * why the mode is asked for here rather than when the subscription was created.
+     */
+    async resolveSubscription(
+      setupToken: string,
+      options: { gasPaymentMode?: GasPaymentMode; payer?: string } = {},
+    ): Promise<ResolvedSubscription> {
+      const sponsored = options.gasPaymentMode === 'payment_token' && options.payer !== undefined
+      const body = await postOrThrow('/v1/subscriptions/resolve', {
+        setup_token: setupToken,
+        ...(sponsored ? { gas_payment_mode: options.gasPaymentMode, payer: options.payer } : {}),
+      })
       return {
         recipient: body.recipient as string,
         amount: body.amount as string,
@@ -908,6 +946,15 @@ export function createP2Flux(options: P2FluxOptions) {
         networkFeeEstimate: (body.network_fee_estimate ?? null) as string | null,
         expiresAt: body.expires_at as number,
         typedData: (body.typed_data ?? {}) as Record<string, unknown>,
+        ...(body.sponsorship_quote === undefined
+          ? {}
+          : {
+              sponsorship: {
+                quote: networkFeeQuote(body.sponsorship_quote as Record<string, unknown>),
+                allowancePermit: body.allowance_permit as Record<string, unknown>,
+                networkFeeAuthorization: body.network_fee_authorization as Record<string, unknown>,
+              },
+            }),
         raw: body,
       }
     },
@@ -919,18 +966,52 @@ export function createP2Flux(options: P2FluxOptions) {
      * credential: encrypted at rest, never in a URL, never in a log. Everything else about the
      * subscription is reconstructed from the chain on demand.
      */
-    async finalizeSubscription(setupToken: string, payer: string, signature: string): Promise<FinalizedSubscription> {
+    async finalizeSubscription(
+      setupToken: string,
+      payer: string,
+      signature: string,
+      /* For a customer with no native currency: the quote and the two signatures from `resolve`.
+       * The capability is minted before any of this is spent, so a sponsorship that fails comes
+       * back in `sponsorship` rather than as an error - the subscription is real either way. */
+      sponsorship?: {
+        quote: string
+        permitSignature: string
+        networkFeeSignature: string
+        permitNonce?: string
+      },
+    ): Promise<FinalizedSubscription> {
       const body = await postOrThrow('/v1/subscriptions/finalize', {
         setup_token: setupToken,
         payer,
         signature,
+        ...(sponsorship
+          ? {
+              sponsorship: {
+                quote: sponsorship.quote,
+                permit_signature: sponsorship.permitSignature,
+                network_fee_signature: sponsorship.networkFeeSignature,
+                ...(sponsorship.permitNonce === undefined ? {} : { permit_nonce: sponsorship.permitNonce }),
+              },
+            }
+          : {}),
       })
+      const outcome = body.sponsorship as Record<string, unknown> | undefined
       return {
         subscription: body.subscription as string,
         subscriptionId: body.subscription_id as string,
         amount: body.amount as string,
         period: body.period as number,
         end: body.end as number | undefined,
+        ...(outcome === undefined
+          ? {}
+          : {
+              sponsorship: {
+                status: outcome.status as 'SETTLED' | 'SPONSORSHIP_CONFIRMING' | 'ALREADY_SETTLED' | 'FAILED',
+                txHash: outcome.tx_hash as string | undefined,
+                code: outcome.code as string | undefined,
+                raw: outcome,
+              },
+            }),
         raw: body,
       }
     },
