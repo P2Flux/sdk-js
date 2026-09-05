@@ -324,8 +324,14 @@ export type NetworkFeeQuote = {
   quotedNetworkFeeUnits: string
   /** The ceiling that price may not exceed. */
   maxNetworkFeeUnits: string
-  /** Flat P2Flux fee for the gas service. Zero outside one-time payments. */
-  gasServiceFeeUnits: string
+  /**
+   * The fixed network fee on a one-time payment, in base units. Zero outside one-time payments.
+   *
+   * MERCHANT-funded: it comes out of the amount, like the percentage fee, and is paid to the gas
+   * treasury - the same arrangement a subscription has. It is not part of `buyerTotalUnits`; a
+   * buyer is debited the price plus the quoted network fee and never a P2Flux fee on top.
+   */
+  fixedNetworkFeeUnits: string
   /** Price plus fees plus the payment itself, for a one-time payment. */
   buyerTotalUnits?: string
   quotedAt: number
@@ -340,7 +346,8 @@ export type PaymentAccounting = {
   paymentUnits: string
   paymentFeeUnits: string
   networkFeeUnits: string
-  gasServiceFeeUnits: string
+  /** Merchant-funded, out of the amount. Not part of `buyerTotalUnits`. */
+  fixedNetworkFeeUnits: string
   merchantNetUnits: string
   buyerTotalUnits: string
   payer?: string
@@ -391,7 +398,7 @@ export type SponsoredPaymentResult = {
   txHash: string
   reference: string
   networkFeeUnits: string
-  gasServiceFeeUnits: string
+  fixedNetworkFeeUnits: string
   buyerTotalUnits: string
   raw: Record<string, unknown>
 }
@@ -407,7 +414,7 @@ export type Capabilities = {
     symbol: string
     decimals: number
     gasPaymentModes: GasPaymentMode[]
-    gasServiceFeeUnits: string
+    fixedNetworkFeeUnits: string
     operations: Record<string, boolean>
     /** Revoking a recurring authorization is always the payer's own transaction. */
     zeroNativeRevoke: boolean
@@ -671,7 +678,7 @@ export type SubscriptionSponsorship = {
 const networkFeeQuote = (raw: Record<string, unknown>): NetworkFeeQuote => ({
   quotedNetworkFeeUnits: raw.quoted_network_fee_units as string,
   maxNetworkFeeUnits: raw.max_network_fee_units as string,
-  gasServiceFeeUnits: raw.gas_service_fee_units as string,
+  fixedNetworkFeeUnits: raw.fixed_network_fee_units as string,
   buyerTotalUnits: raw.buyer_total_units as string | undefined,
   quotedAt: raw.quoted_at as number,
   expiresAt: raw.expires_at as number,
@@ -794,7 +801,7 @@ export function createP2Flux(options: P2FluxOptions) {
         txHash: body.tx_hash as string,
         reference: body.reference as string,
         networkFeeUnits: body.network_fee_units as string,
-        gasServiceFeeUnits: body.gas_service_fee_units as string,
+        fixedNetworkFeeUnits: body.fixed_network_fee_units as string,
         buyerTotalUnits: body.buyer_total_units as string,
         raw: body,
       }
@@ -844,7 +851,7 @@ export function createP2Flux(options: P2FluxOptions) {
           symbol: token.symbol as string,
           decimals: token.decimals as number,
           gasPaymentModes: token.gas_payment_modes as GasPaymentMode[],
-          gasServiceFeeUnits: token.gas_service_fee_units as string,
+          fixedNetworkFeeUnits: token.fixed_network_fee_units as string,
           operations: (token.operations ?? {}) as Record<string, boolean>,
           zeroNativeRevoke: Boolean(token.zero_native_revoke),
         })),

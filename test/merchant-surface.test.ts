@@ -301,7 +301,7 @@ test('a zero-native signup asks for the price and carries back what the customer
     sponsorship_quote: {
       quoted_network_fee_units: '4000',
       max_network_fee_units: '4000',
-      gas_service_fee_units: '0',
+      fixed_network_fee_units: '0',
       quoted_at: 1787600000,
       expires_at: 1787600300,
       quote: 'p2gas1.k1.body.mac',
