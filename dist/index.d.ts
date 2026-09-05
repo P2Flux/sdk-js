@@ -14,7 +14,7 @@
  * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
-export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT';
+export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT';
 export type MerchantAction = 'SUCCESS' | 'WAIT' | 'RETRY_LATER' | 'CUSTOMER_ACTION_REQUIRED' | 'STOP_SUBSCRIPTION' | 'INVALID_REQUEST';
 export type ChargeResult = {
     status: ChargeStatus;
@@ -125,6 +125,9 @@ export type AllowanceRestoreSession = {
 };
 /** What an allowance-restore session authorizes - for the browser holding it. */
 export type AllowanceRestoreTerms = {
+    gasPaymentMode?: GasPaymentMode;
+    /** Present only when the repair is sponsored: what the customer pays for the transaction. */
+    sponsorshipQuote?: NetworkFeeQuote;
     chainId: number;
     token: string;
     /** The recurring contract. Never a value the page was opened with. */
@@ -181,9 +184,46 @@ export type RefundVerification = {
     raw: Record<string, unknown>;
 };
 /** Terms for a one-time payment: who gets paid, and how much USDC (decimal string, "12.50"). */
+/**
+ * How the buyer pays the chain's network fee.
+ *
+ * `native` is what has always happened: the buyer sends the transaction and pays gas in the chain's
+ * own currency. `payment_token` lets a buyer who holds only the payment token pay - P2Flux sends the
+ * transaction and the buyer reimburses the quoted network cost in that same token, plus a flat gas
+ * service fee. Ask `capabilities()` before offering it; not every network and token supports it.
+ */
+export type GasPaymentMode = 'native' | 'payment_token';
 export type PaymentTerms = {
     recipient: string;
     amount: string;
+    /** Omit for `native`. Existing integrations keep their current behaviour and fees exactly. */
+    gasPaymentMode?: GasPaymentMode;
+};
+/** What one sponsored operation will cost the buyer, and how long the price stands. */
+export type NetworkFeeQuote = {
+    /** The price the buyer accepts and pays. Not a measurement of gas used. */
+    quotedNetworkFeeUnits: string;
+    /** The ceiling that price may not exceed. */
+    maxNetworkFeeUnits: string;
+    /** Flat P2Flux fee for the gas service. Zero outside one-time payments. */
+    gasServiceFeeUnits: string;
+    /** Price plus fees plus the payment itself, for a one-time payment. */
+    buyerTotalUnits?: string;
+    quotedAt: number;
+    expiresAt: number;
+    /** Opaque; hand it back to `sponsorPayment` unchanged. */
+    quote: string;
+    raw: Record<string, unknown>;
+};
+/** Every unit of a settled payment, read from the chain. */
+export type PaymentAccounting = {
+    paymentUnits: string;
+    paymentFeeUnits: string;
+    networkFeeUnits: string;
+    gasServiceFeeUnits: string;
+    merchantNetUnits: string;
+    buyerTotalUnits: string;
+    payer?: string;
 };
 export type PaymentIntent = {
     /** Signed capability for this exact payment. Put it in the checkout link fragment: `#/pay/<intent>`. */
@@ -216,6 +256,38 @@ export type ResolvedPayment = {
     expiresAt: number;
     /** How many confirmations a verify will wait for; null when the API leaves it to its default. */
     confirmationsRequired: number | null;
+    gasPaymentMode: GasPaymentMode;
+    /** Present only in `payment_token` mode: what the buyer will pay for the network, and until when. */
+    networkFeeQuote?: NetworkFeeQuote;
+    raw: Record<string, unknown>;
+};
+/** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
+export type SponsoredPaymentResult = {
+    /** `SUBMITTED` once it is mined; `CONFIRMING` while its fate is still unknown - never re-send. */
+    status: 'SUBMITTED' | 'CONFIRMING';
+    txHash: string;
+    reference: string;
+    networkFeeUnits: string;
+    gasServiceFeeUnits: string;
+    buyerTotalUnits: string;
+    raw: Record<string, unknown>;
+};
+/** What a deployment can actually do, per token and per operation. */
+export type Capabilities = {
+    chainId: number;
+    network?: string;
+    nativeCurrency?: string;
+    supported: boolean;
+    tokens: {
+        address: string;
+        symbol: string;
+        decimals: number;
+        gasPaymentModes: GasPaymentMode[];
+        gasServiceFeeUnits: string;
+        operations: Record<string, boolean>;
+        /** Revoking a recurring authorization is always the payer's own transaction. */
+        zeroNativeRevoke: boolean;
+    }[];
     raw: Record<string, unknown>;
 };
 /**
@@ -365,6 +437,41 @@ export declare function createP2Flux(options: P2FluxOptions): {
     /** The authoritative terms for a checkout to display, read back from the intent itself. */
     resolvePayment(intent: string): Promise<ResolvedPayment>;
     /**
+     * Settle a payment whose buyer holds no native currency.
+     *
+     * The buyer signs the token authorization the checkout showed them; this hands that signature to
+     * P2Flux, which sends the transaction and takes the quoted network fee out of the same
+     * authorization. `CONFIRMING` means it is in flight - ask `verifyPayment` about the hash rather
+     * than calling this again, because the buyer's authorization may already be spent.
+     */
+    sponsorPayment(args: {
+        intent: string;
+        quote: string;
+        payer: string;
+        signature: string;
+    }): Promise<SponsoredPaymentResult>;
+    /**
+     * Carry a customer's signed allowance change onto the chain.
+     *
+     * `allowanceUnits: '0'` removes the allowance, which stops collection - it does NOT revoke the
+     * recurring authorization, which only the payer's own transaction can do. Report the two
+     * separately to customers.
+     */
+    submitAllowanceRestore(args: {
+        approveToken: string;
+        quote: string;
+        permitSignature: string;
+        networkFeeSignature: string;
+        allowanceUnits?: string;
+        permitNonce?: string;
+    }): Promise<Record<string, unknown>>;
+    /**
+     * What this deployment supports, before you offer a buyer anything.
+     *
+     * Read it once at start-up rather than per checkout: it changes only when the deployment does.
+     */
+    capabilities(): Promise<Capabilities>;
+    /**
      * Verify a payment against the chain. Returns a verdict, not an exception: `valid: false` with
      * `PAYMENT_CONFIRMING` means ask again in a few seconds about the SAME hash; the other codes
      * mean this transaction does not settle this intent. Only a malformed request, rate limiting or
@@ -455,7 +562,7 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * ERC-20 `approve()`, and the spender comes from here rather than from anything the page was
      * opened with.
      */
-    resolveAllowanceRestore(approveToken: string): Promise<AllowanceRestoreTerms>;
+    resolveAllowanceRestore(approveToken: string, gasPaymentMode?: GasPaymentMode): Promise<AllowanceRestoreTerms>;
     /**
      * A short-lived cancel token safe to hand to the customer's BROWSER (`#/cancel/<cancel_token>`).
      *

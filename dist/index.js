@@ -99,7 +99,32 @@ const ACTIONS = {
     /* The customer's contract wallet costs more to validate than the API will spend. Only the
      * customer can fix that, by authorizing from an ordinary wallet. */
     SIGNATURE_VALIDATION_TOO_EXPENSIVE: 'CUSTOMER_ACTION_REQUIRED',
+    /* Paying the network fee in the payment token. Unsupported is a fact about the deployment, so it
+     * is INVALID_REQUEST rather than something to wait out - fall back to native gas. An expired quote
+     * needs a fresh price and a fresh signature, which only the customer can give. */
+    PAYMENT_TOKEN_GAS_UNSUPPORTED: 'INVALID_REQUEST',
+    PAYMENT_TOKEN_GAS_UNAVAILABLE: 'RETRY_LATER',
+    PAYMENT_TOKEN_GAS_QUOTE_EXPIRED: 'CUSTOMER_ACTION_REQUIRED',
+    PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED: 'RETRY_LATER',
+    INVALID_GAS_QUOTE: 'INVALID_REQUEST',
+    INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS: 'CUSTOMER_ACTION_REQUIRED',
+    SPONSORED_TRANSACTION_FAILED: 'RETRY_LATER',
+    SPONSORED_PERMIT_FAILED: 'RETRY_LATER',
+    /* In flight: the buyer's authorization may already be spent, so the answer is to look the
+     * settlement up, never to send another one. */
+    SPONSORSHIP_CONFIRMING: 'WAIT',
 };
+/** The wire shape of a quote, in the SDK's camelCase. */
+const networkFeeQuote = (raw) => ({
+    quotedNetworkFeeUnits: raw.quoted_network_fee_units,
+    maxNetworkFeeUnits: raw.max_network_fee_units,
+    gasServiceFeeUnits: raw.gas_service_fee_units,
+    buyerTotalUnits: raw.buyer_total_units,
+    quotedAt: raw.quoted_at,
+    expiresAt: raw.expires_at,
+    quote: raw.quote,
+    raw,
+});
 export function createP2Flux(options) {
     const base = options.apiUrl.replace(/\/$/, '');
     const timeoutMs = options.timeoutMs ?? 60_000;
@@ -145,7 +170,11 @@ export function createP2Flux(options) {
          * recovery and refunds all start from it.
          */
         async createPayment(terms) {
-            const body = await postOrThrow('/v1/payments', { recipient: terms.recipient, amount: terms.amount });
+            const body = await postOrThrow('/v1/payments', {
+                recipient: terms.recipient,
+                amount: terms.amount,
+                ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+            });
             const pay = (body.pay ?? {});
             return {
                 intent: body.intent,
@@ -176,6 +205,78 @@ export function createP2Flux(options) {
                 reference: body.reference,
                 expiresAt: body.expires_at,
                 confirmationsRequired: (body.confirmations_required ?? null),
+                gasPaymentMode: (body.gas_payment_mode ?? 'native'),
+                ...(body.network_fee_quote === undefined
+                    ? {}
+                    : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
+                raw: body,
+            };
+        },
+        /**
+         * Settle a payment whose buyer holds no native currency.
+         *
+         * The buyer signs the token authorization the checkout showed them; this hands that signature to
+         * P2Flux, which sends the transaction and takes the quoted network fee out of the same
+         * authorization. `CONFIRMING` means it is in flight - ask `verifyPayment` about the hash rather
+         * than calling this again, because the buyer's authorization may already be spent.
+         */
+        async sponsorPayment(args) {
+            const body = await postOrThrow('/v1/payments/sponsor', {
+                intent: args.intent,
+                quote: args.quote,
+                payer: args.payer,
+                signature: args.signature,
+            });
+            return {
+                status: body.status,
+                txHash: body.tx_hash,
+                reference: body.reference,
+                networkFeeUnits: body.network_fee_units,
+                gasServiceFeeUnits: body.gas_service_fee_units,
+                buyerTotalUnits: body.buyer_total_units,
+                raw: body,
+            };
+        },
+        /**
+         * Carry a customer's signed allowance change onto the chain.
+         *
+         * `allowanceUnits: '0'` removes the allowance, which stops collection - it does NOT revoke the
+         * recurring authorization, which only the payer's own transaction can do. Report the two
+         * separately to customers.
+         */
+        async submitAllowanceRestore(args) {
+            return postOrThrow('/v1/allowances/restore/submit', {
+                approve_token: args.approveToken,
+                quote: args.quote,
+                permit_signature: args.permitSignature,
+                network_fee_signature: args.networkFeeSignature,
+                ...(args.allowanceUnits === undefined ? {} : { allowance_units: args.allowanceUnits }),
+                ...(args.permitNonce === undefined ? {} : { permit_nonce: args.permitNonce }),
+            });
+        },
+        /**
+         * What this deployment supports, before you offer a buyer anything.
+         *
+         * Read it once at start-up rather than per checkout: it changes only when the deployment does.
+         */
+        async capabilities() {
+            // POST, not GET: the endpoint answers both, and POST is the one shape every transport a host
+            // might inject can make.
+            const body = await postOrThrow('/v1/capabilities', {});
+            return {
+                chainId: body.chain_id,
+                network: body.network,
+                nativeCurrency: body.native_currency,
+                supported: Boolean(body.supported),
+                tokens: (body.tokens ?? []).map((token) => ({
+                    address: token.address,
+                    symbol: token.symbol,
+                    decimals: token.decimals,
+                    gasPaymentModes: token.gas_payment_modes,
+                    gasServiceFeeUnits: token.gas_service_fee_units,
+                    operations: (token.operations ?? {}),
+                    zeroNativeRevoke: Boolean(token.zero_native_revoke),
+                })),
                 raw: body,
             };
         },
@@ -441,8 +542,15 @@ export function createP2Flux(options) {
          * ERC-20 `approve()`, and the spender comes from here rather than from anything the page was
          * opened with.
          */
-        async resolveAllowanceRestore(approveToken) {
-            const body = await postOrThrow('/v1/allowances/restore/resolve', { approve_token: approveToken });
+        async resolveAllowanceRestore(approveToken, 
+        /* With `payment_token` the response also carries a price and the two messages the customer
+         * signs, and P2Flux sends the transaction. Without it, nothing changes: the customer's own
+         * wallet sends the `approve()`. */
+        gasPaymentMode) {
+            const body = await postOrThrow('/v1/allowances/restore/resolve', {
+                approve_token: approveToken,
+                ...(gasPaymentMode === undefined ? {} : { gas_payment_mode: gasPaymentMode }),
+            });
             return {
                 chainId: body.chain_id,
                 token: body.token,
@@ -452,6 +560,10 @@ export function createP2Flux(options) {
                 requiredUnits: body.required_units,
                 approveUnits: body.approve_units ?? null,
                 expiresAt: body.expires_at,
+                gasPaymentMode: (body.gas_payment_mode ?? 'native'),
+                ...(body.sponsorship_quote === undefined
+                    ? {}
+                    : { sponsorshipQuote: networkFeeQuote(body.sponsorship_quote) }),
                 raw: body,
             };
         },
