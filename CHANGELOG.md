@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 - 2026-09-06
+
+### Added
+
+- `capabilities()` now returns `sponsorContracts` — the contract carrying each sponsored operation,
+  which the API has always sent and this client silently dropped. A checkout holds an offer's fee
+  recipient against the network's own declaration rather than against the offer itself.
+- The guide has a full "Paying the network fee in USDC" section, `docs/protocol-contract.md` lists
+  `capabilities()` and the sponsored accounting fields, and `examples/network-fee-in-usdc.ts` is a
+  worked end-to-end example.
+
 ## 0.7.0 - 2026-09-06
 
 Released with `payment_token` live on Base Mainnet (2026-09-06): `P2FluxSponsoredSplitter`

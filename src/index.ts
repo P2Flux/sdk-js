@@ -419,6 +419,13 @@ export type Capabilities = {
     gasPaymentModes: GasPaymentMode[]
     fixedNetworkFeeUnits: string
     operations: Record<string, boolean>
+    /**
+     * The contract that carries each sponsored operation, or null where it is not offered.
+     *
+     * A checkout holds an offer's fee recipient against this rather than against the offer itself:
+     * the network's own declaration, from a different endpoint than the one that made the offer.
+     */
+    sponsorContracts: Record<string, string | null>
     /** Revoking a recurring authorization is always the payer's own transaction. */
     zeroNativeRevoke: boolean
   }[]
@@ -883,6 +890,7 @@ export function createP2Flux(options: P2FluxOptions) {
           gasPaymentModes: token.gas_payment_modes as GasPaymentMode[],
           fixedNetworkFeeUnits: token.fixed_network_fee_units as string,
           operations: (token.operations ?? {}) as Record<string, boolean>,
+          sponsorContracts: (token.sponsor_contracts ?? {}) as Record<string, string | null>,
           zeroNativeRevoke: Boolean(token.zero_native_revoke),
         })),
         raw: body,

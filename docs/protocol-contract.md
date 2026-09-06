@@ -19,7 +19,8 @@ The **complete public V1 merchant/server API** — the same 18 operations as the
 
 | Method | Notes |
 |---|---|
-| `createPayment(terms)` | `{recipient, amount}` → signed intent plus the `pay` block a checkout needs. |
+| `capabilities()` | Which networks, tokens and operations this deployment really supports, and which contract carries each (`sponsorContracts`). Ask before offering `payment_token`. |
+| `createPayment(terms)` | `{recipient, amount, gasPaymentMode?}` → signed intent plus the `pay` block a checkout needs. `gasPaymentMode: 'payment_token'` lets a buyer holding no ETH pay by signing; the network fee is taken in USDC. |
 | `resolvePayment(intent)` | Authoritative display terms, read back from the intent. |
 | `verifyPayment(intent, txHash, receipt?)` | The trust boundary. Returns a **discriminated union on `valid`** — a rejected payment is a 200-level verdict with a `code`, never an exception. The optional settlement receipt lets the server answer without re-reading the chain; a bad one silently falls back to full verification. |
 | `recoverPayment(intent)` | Finds a settlement whose tx hash was lost. Not-found and confirming are results, not exceptions. |
@@ -37,6 +38,23 @@ The **complete public V1 merchant/server API** — the same 18 operations as the
 
 The two `prepare*` calls return unsigned calldata. P2Flux cannot revoke wallet authority and does
 not pretend to: only the payer's wallet can send those transactions.
+
+## Paying the network fee in USDC
+
+`gasPaymentMode: 'payment_token'` changes who sends the transaction, not who is owed what. The buyer
+signs a token authorization for `amount + quotedNetworkFee`; P2Flux submits it and pays the Base
+network fee in ETH. Your share still settles directly, in that same transaction.
+
+- `capabilities()` first — a token that implements the right standards on a network P2Flux has not
+  deployed to reports `false`, and the request is refused with `PAYMENT_TOKEN_GAS_UNSUPPORTED`.
+- `verifyPayment()` and `recoverPayment()` add `gasPaymentMode` and an `accounting` block
+  (`paymentUnits`, `paymentFeeUnits`, `networkFeeUnits`, `fixedNetworkFeeUnits`, `merchantNetUnits`,
+  `buyerTotalUnits`, `payer`) — every figure in USDC base units.
+- The 1% and the fixed 0.10 USDC network fee are merchant-funded out of the amount, exactly as on a
+  subscription collection. The buyer is debited the price plus the quoted network fee and nothing else.
+- Per buyer wallet: 10 sponsored transactions in any rolling hour, 20 in any rolling day, across all
+  merchants and operations. Over that, `RATE_LIMITED` with `retryAfter`; nothing is spent. Your
+  `charge()` calls are never counted.
 
 ## Result handling
 

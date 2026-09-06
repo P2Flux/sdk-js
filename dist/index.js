@@ -295,6 +295,7 @@ export function createP2Flux(options) {
                     gasPaymentModes: token.gas_payment_modes,
                     fixedNetworkFeeUnits: token.fixed_network_fee_units,
                     operations: (token.operations ?? {}),
+                    sponsorContracts: (token.sponsor_contracts ?? {}),
                     zeroNativeRevoke: Boolean(token.zero_native_revoke),
                 })),
                 raw: body,
