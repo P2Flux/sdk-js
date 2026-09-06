@@ -6,10 +6,10 @@ dependencies, `fetch` injectable for tests and for hosts with their own HTTP sta
 This repository is the **canonical source** for the JS SDK. The full integration guide is
 [`docs/guide.md`](docs/guide.md); the call-and-result contract is
 [`docs/protocol-contract.md`](docs/protocol-contract.md). Version numbers are shared with the PHP
-SDK: both are v0.6.1 and expose the same eighteen public operations.
+SDK: both are v0.7.0 and expose the same public operations.
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.6.1     # not on npm yet
+npm install github:P2Flux/sdk-js#v0.7.0     # not on npm; install from the tag
 ```
 
 ## Scope
@@ -73,6 +73,47 @@ are loopback-only. None of the three belongs in an SDK.
 public V1 merchant operations and fails if any stops being reachable through the SDK; the PHP SDK
 and P2Flux/core carry the same guard. A new public operation added to the API turns every list
 red until both SDKs support it.
+
+
+## Paying the network fee in USDC — no ETH required
+
+Live on Base Mainnet and Base Sepolia. Pass `gasPaymentMode: 'payment_token'` when you create a
+payment and the hosted checkout lets a buyer who holds USDC and no ETH pay by signing: P2Flux sends
+the transaction and pays the Base gas, the buyer pays a quoted network fee in USDC in the same
+transaction, and your share still settles straight to your wallet. Subscription signup, allowance
+restore and allowance removal work the same way from the hosted checkout, with no change on your side.
+
+```ts
+const caps = await p2flux.capabilities()               // ask before offering it
+const usdc = caps.tokens.find((t) => t.symbol === 'USDC')
+const canSponsor = usdc?.gasPaymentModes.includes('payment_token')
+
+const payment = await p2flux.createPayment({
+  recipient: merchantWallet,
+  amount: '12.50',
+  gasPaymentMode: canSponsor ? 'payment_token' : 'native',
+})
+sendBuyerTo(`https://pay.p2flux.com/#/pay/${payment.intent}`)
+
+const verdict = await p2flux.verifyPayment(payment.intent, txHash)
+// verdict.gasPaymentMode === 'payment_token'
+// verdict.accounting: { paymentUnits, paymentFeeUnits, networkFeeUnits, fixedNetworkFeeUnits,
+//                       merchantNetUnits, buyerTotalUnits, payer }  (USDC base units)
+```
+
+The buyer is debited the price plus the quoted network fee and nothing else. P2Flux's 1% and the
+fixed 0.10 USDC network fee both come out of the amount, so you fund them exactly as a subscription
+collection does. USDC is never converted to ETH.
+
+Per buyer wallet, sponsored transactions are limited to 10 in any rolling hour and 20 in any rolling
+day across all merchants and operations. A refused attempt answers `RATE_LIMITED` (HTTP 429, with
+`retry_after`) and costs nothing; the hosted checkout tells the buyer to try again later, or to pay
+the network fee with ETH where the wallet can. Your `charge()` calls are never counted.
+
+Contracts: Base Mainnet `P2FluxSponsoredSplitter` `0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df`,
+`P2FluxGasSponsor` `0xD1DDAaa301403d18fD4A23Fc69493ef48af90285`; Base Sepolia
+`0x876f7b98e8c06291ec916a3223a92038b0a8774f`, `0x2dc51643040d7c396f1199a0664ac095d4b89ec5`.
+`capabilities()` returns them per operation as `sponsorContracts`.
 
 ## The one rule worth knowing
 
