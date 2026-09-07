@@ -1,215 +1,225 @@
-# @p2flux/sdk
+# P2Flux JavaScript SDK
 
-Zero-dependency JavaScript/TypeScript client for the P2Flux payments API. One file, no runtime
-dependencies, `fetch` injectable for tests and for hosts with their own HTTP stack.
-
-This repository is the **canonical source** for the JS SDK. The full integration guide is
-[`docs/guide.md`](docs/guide.md); the call-and-result contract is
-[`docs/protocol-contract.md`](docs/protocol-contract.md). The PHP SDK
-(`p2flux/sdk-php`) exposes the same public operations.
+[![npm](https://img.shields.io/npm/v/@p2flux/sdk)](https://www.npmjs.com/package/@p2flux/sdk)
 
 ```bash
-npm install github:P2Flux/sdk-js#v0.7.1     # not on npm; install from the tag
+npm install @p2flux/sdk
 ```
 
-## Scope
+Zero dependencies, TypeScript types included, ESM only. Node 18+, Deno, Bun, Cloudflare Workers.
 
-This client covers the **complete public V1 merchant/server API** — the same surface as the PHP
-SDK (`p2flux/sdk-php`, `composer require p2flux/sdk-php`). One-time payments, verification with settlement receipts, lost-payment
-recovery, subscription setup / finalize / charge / status, cancellation, allowance revocation and
-refunds are all first-class typed methods: no raw REST calls are needed for a normal integration.
-The buyer-side wallet experience is the hosted checkout, not an SDK.
+## What P2Flux does
 
-Production API: `https://api.p2flux.com` (Base Mainnet — **real money**). Test:
-`https://api-test.p2flux.com` (Base Sepolia, faucet USDC — integrate here first).
+P2Flux takes USDC payments on Base that settle **straight to your own wallet**. There is no custody,
+no payout step and no account balance: the buyer's transaction pays you directly.
+
+It executes payments; your application keeps everything else. No scheduler, no stored orders, no
+retry loops — you already have those.
+
+- **One-time payments.** Create an intent, send the buyer to the hosted checkout, verify server-side.
+- **Subscriptions.** The customer signs one authorization; your renewal job calls `charge()` when a
+  period is due. The contract allows one charge per period, so retries are safe.
+- **Buyers with no ETH.** Optionally, the buyer pays the network fee in USDC instead of holding the
+  chain's native currency.
+- **Refunds.** A plain transfer from your wallet, verified by P2Flux, which never holds the money.
+
+## Five-minute payment
 
 ```ts
 import { createP2Flux } from '@p2flux/sdk'
 
-const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.com', timeoutMs: 30_000 })
+const p2flux = createP2Flux({ apiUrl: 'https://api-test.p2flux.com', timeoutMs: 30_000 })
 
-// One-time: create → hosted checkout → verify
+// 1. Mint an intent on your server and store it on the order.
 const payment = await p2flux.createPayment({ recipient: merchantWallet, amount: '12.50' })
-sendBuyerTo(`https://pay.p2flux.com/#/pay/${payment.intent}`)
-const verdict = await p2flux.verifyPayment(payment.intent, txHash)
-if (verdict.valid) markPaid(verdict.txHash, verdict.settlementReceipt)
+order.p2fluxIntent = payment.intent
 
-// Recurring: create → hosted checkout authorizes → finalize → charge from YOUR renewal job
-const setup = await p2flux.createSubscription({ recipient: merchantWallet, amount: '5.00', period: 30 * 24 * 3600 })
-const sub = await p2flux.finalizeSubscription(setup.setupToken, payer, signature)
-const result = await p2flux.charge(sub.subscription)   // never throws; inspect status / action
+// 2. Send the buyer to the hosted checkout.
+const url = `https://pay-test.p2flux.com/#/pay/${encodeURIComponent(payment.intent)}`
 
-// Lost the response? ALREADY_CHARGED proves the period was collected and names no transaction.
-const settled = await p2flux.recoverCharge(sub.subscription, result.periodIndex ?? 0)
+// 3. The checkout hands your page a transaction hash. Verify it server-side.
+const verdict = await p2flux.verifyPayment(order.p2fluxIntent, txHash)
+if (verdict.valid) {
+  order.markPaid(verdict.txHash)
+}
 ```
 
-### Method ↔ operation map
+`https://api-test.p2flux.com` is Base Sepolia with faucet USDC. Production is
+`https://api.p2flux.com` with real money. **There is no API key** — a payment is bound to its
+recipient and amount by the buyer's own signature.
 
-| Operation | Method | PHP equivalent |
-|---|---|---|
-| `POST /v1/payments` | `createPayment` | `createPayment` |
-| `POST /v1/payments/resolve` | `resolvePayment` | `resolvePayment` |
-| `POST /v1/payments/verify` | `verifyPayment` | `verifyPayment` |
-| `POST /v1/payments/recover` | `recoverPayment` | `recoverPayment` |
-| `POST /v1/subscriptions` | `createSubscription` | `createSubscription` |
-| `POST /v1/subscriptions/resolve` | `resolveSubscription` | `resolveSubscription` |
-| `POST /v1/subscriptions/finalize` | `finalizeSubscription` | `finalizeSubscription` |
-| `POST /v1/charges` | `charge` | `charge` |
-| `POST /v1/charges/recover` | `recoverCharge` | `recoverCharge` |
-| `POST /v1/subscriptions/status` | `status` | `status` |
-| `POST /v1/subscriptions/revoke/session` | `createCancellationSession` | `createCancellationSession` |
-| `POST /v1/subscriptions/revoke/prepare` | `prepareSubscriptionCancellation` | `prepareSubscriptionCancellation` |
-| `POST /v1/allowances/revoke/prepare` | `prepareAllowanceRevocation` | `prepareAllowanceRevocation` |
-| `POST /v1/allowances/restore/session` | `createAllowanceRestoreSession` | `createAllowanceRestoreSession` |
-| `POST /v1/allowances/restore/resolve` | `resolveAllowanceRestore` | `resolveAllowanceRestore` |
-| `POST /v1/refunds/prepare` | `prepareRefund` | `prepareRefund` |
-| `POST /v1/refunds/resolve` | `resolveRefund` | `resolveRefund` |
-| `POST /v1/refunds/verify` | `verifyRefund` | `verifyRefund` |
+## Hosted checkout flow
 
-`/health` is an operational liveness endpoint, not a merchant operation; `/metrics` and `/ready`
-are loopback-only. None of the three belongs in an SDK.
+The buyer pays in P2Flux's hosted checkout, which reports back to the page that opened it. This half
+is plain browser JavaScript; the SDK is not involved and does not belong in a bundle.
 
-**Parity is tested, not promised.** `test/parity.test.ts` holds the checked-in list of all 15
-public V1 merchant operations and fails if any stops being reachable through the SDK; the PHP SDK
-and P2Flux/core carry the same guard. A new public operation added to the API turns every list
-red until both SDKs support it.
+```js
+const url = `${CHECKOUT}/#/pay/${encodeURIComponent(intent)}`
+const win = window.open(url, 'p2flux', 'width=460,height=680')
 
+addEventListener('message', (event) => {
+  if (event.origin !== new URL(CHECKOUT).origin) return
 
-## Paying the network fee in USDC — no ETH required
+  if (event.data?.type === 'p2flux.ready') {
+    win.postMessage({ type: 'p2flux.hello' }, new URL(CHECKOUT).origin)
+  }
 
-Live on Base Mainnet and Base Sepolia. Pass `gasPaymentMode: 'payment_token'` when you create a
-payment and the hosted checkout lets a buyer who holds USDC and no ETH pay by signing: P2Flux sends
-the transaction and pays the Base gas, the buyer pays a quoted network fee in USDC in the same
-transaction, and your share still settles straight to your wallet. Subscription signup, allowance
-restore and allowance removal work the same way from the hosted checkout, with no change on your side.
+  if (event.data?.type === 'p2flux.payment.completed') {
+    fetch('/orders/verify', {                    // hand it to your server; decide nothing here
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order: ORDER_ID, txHash: event.data.tx_hash }),
+    })
+  }
+})
+```
+
+The intent rides in the URL fragment, which browsers never send to a server or put in `Referer`.
+
+## Verify before fulfilling
+
+**P2Flux sends no webhooks.** The browser message says what a wallet did; your server's verdict is
+what decides. `verifyPayment()` returns a discriminated union, so TypeScript narrows it for you:
+
+| Verdict | Meaning |
+|---|---|
+| `valid: true` | Settled. Mark the order paid — once, under a lock. |
+| `code: 'PAYMENT_CONFIRMING'` | On chain, not deep enough. Poll the same hash; never re-ask the buyer. |
+| any other `code` | This transaction does not settle this intent. |
+| a thrown `P2FluxError` | Never reached a verdict. Unknown, not rejected: retry. |
+
+Lost the hash entirely? `recoverPayment(intent)` finds the settlement from the intent alone.
+
+Full walk-through: [The payment lifecycle](docs/payment-flow.md).
+
+## Pay the network fee in USDC
+
+A buyer holding USDC and **no ETH** can still pay. They sign a token authorization; P2Flux submits
+the transaction and pays the Base network fee in ETH, and the buyer reimburses that exact cost in
+USDC in the same transaction. Nothing is waived — the fee is quoted before they sign, and they pay
+it in USDC rather than in ETH. USDC is never converted.
 
 ```ts
-const caps = await p2flux.capabilities()               // ask before offering it
-const usdc = caps.tokens.find((t) => t.symbol === 'USDC')
-const canSponsor = usdc?.gasPaymentModes.includes('payment_token')
+const caps = await p2flux.capabilities()                    // ask before offering it
+const usdc = caps.tokens.find((token) => token.symbol === 'USDC')
+const sponsored = usdc?.gasPaymentModes.includes('payment_token') ?? false
 
 const payment = await p2flux.createPayment({
   recipient: merchantWallet,
   amount: '12.50',
-  gasPaymentMode: canSponsor ? 'payment_token' : 'native',
+  gasPaymentMode: sponsored ? 'payment_token' : 'native',
 })
-sendBuyerTo(`https://pay.p2flux.com/#/pay/${payment.intent}`)
-
-const verdict = await p2flux.verifyPayment(payment.intent, txHash)
-// verdict.gasPaymentMode === 'payment_token'
-// verdict.accounting: { paymentUnits, paymentFeeUnits, networkFeeUnits, fixedNetworkFeeUnits,
-//                       merchantNetUnits, buyerTotalUnits, payer }  (USDC base units)
 ```
 
-The buyer is debited the price plus the quoted network fee and nothing else. P2Flux's 1% and the
-fixed 0.10 USDC network fee both come out of the amount, so you fund them exactly as a subscription
-collection does. USDC is never converted to ETH.
+`verifyPayment()` then returns `gasPaymentMode` and an `accounting` block naming every figure in
+USDC base units. Subscription signup and allowance repair take the same path from the hosted
+checkout. Details, limits and contract addresses:
+[Paying the network fee in USDC](docs/network-fee-in-usdc.md).
 
-Per buyer wallet, sponsored transactions are limited to 10 in any rolling hour and 20 in any rolling
-day across all merchants and operations. A refused attempt answers `RATE_LIMITED` (HTTP 429, with
-`retry_after`) and costs nothing; the hosted checkout tells the buyer to try again later, or to pay
-the network fee with ETH where the wallet can. Your `charge()` calls are never counted.
+## Subscriptions
 
-Contracts: Base Mainnet `P2FluxSponsoredSplitter` `0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df`,
-`P2FluxGasSponsor` `0xD1DDAaa301403d18fD4A23Fc69493ef48af90285`; Base Sepolia
-`0x876f7b98e8c06291ec916a3223a92038b0a8774f`, `0x2dc51643040d7c396f1199a0664ac095d4b89ec5`.
-`capabilities()` returns them per operation as `sponsorContracts`.
+P2Flux schedules nothing. Your renewal job decides a period is due:
 
-## The one rule worth knowing
+```ts
+const result = await p2flux.charge(capability)
+
+if (result.ok) return                             // CHARGED or ALREADY_CHARGED - the period is paid
+
+switch (result.action) {
+  case 'WAIT': break                              // confirming; the money moved
+  case 'RETRY_LATER': return retryLater()
+  case 'CUSTOMER_ACTION_REQUIRED': return emailCustomer(result.status)
+  case 'STOP_SUBSCRIPTION': return stopBilling(result.status)
+}
+```
 
 **`charge()` never throws on a payment outcome.** "The customer has no funds" is an answer, not an
-error, so every outcome comes back as a result you switch on. Only transport-level surprises are
-exceptional, and even those arrive as `NETWORK_ERROR` / `RETRY_LATER` rather than as a verdict —
-because an unreachable API tells you nothing about whether the charge landed, and treating it as a
-decline would let you cancel a subscription that just paid.
+error. Only transport-level surprises are exceptional, and an unreachable API says nothing about
+whether the charge landed. See [Subscriptions](docs/subscriptions.md).
 
-Act on `action`, not on `status`, unless you need the detail:
+The `p2s2` capability it charges is a bearer credential: server-side only, encrypted at rest, never
+in a browser bundle. → [Server and browser](docs/server-and-browser.md)
 
-| action | meaning |
+## Runtime support
+
+| | |
 |---|---|
-| `SUCCESS` | paid — `ok` is true for both `CHARGED` and `ALREADY_CHARGED` |
-| `WAIT` | broadcast and confirming; the money moved, do not re-charge |
-| `RETRY_LATER` | transient — capacity, a busy chain, an unreachable API |
-| `CUSTOMER_ACTION_REQUIRED` | they must top up or re-approve; do not cancel |
-| `STOP_SUBSCRIPTION` | revoked or expired on chain; final |
+| Module format | **ESM only.** No CommonJS build. |
+| CommonJS apps | Can load it with a dynamic `import('@p2flux/sdk')`. |
+| Node | 18 or newer |
+| Other runtimes | Deno, Bun, Cloudflare Workers — anything with a global `fetch`, or pass your own |
+| Browsers | **Not a browser SDK.** It is a server-side client; the buyer's experience is the hosted checkout. |
+| Types | Shipped, generated from the source |
 
-`alreadyPaid` exists so a retry that races an earlier success is not a double charge: the second
-call returns `ALREADY_CHARGED`, `ok: true`. Retrying is always safe.
+## Documentation
 
-The full result contract, including every status code, is in
-[`docs/protocol-contract.md`](docs/protocol-contract.md).
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, vocabulary, configuration, environments |
+| [The payment lifecycle](docs/payment-flow.md) | The whole flow, and what may mark an order paid |
+| [Server and browser](docs/server-and-browser.md) | What runs where, and what must never be bundled |
+| [Payments](docs/payments.md) | Intents, checkout, verification |
+| [Paying the network fee in USDC](docs/network-fee-in-usdc.md) | Buyers with no ETH |
+| [Subscriptions](docs/subscriptions.md) | Setup, charging, allowance repair, cancellation |
+| [Refunds](docs/refunds.md) | Merchant-sent, P2Flux-verified |
+| [Recovery](docs/recovery.md) | Lost payments, lost charges, ambiguous requests |
+| [Errors and retries](docs/errors.md) | Every public code, with a recipe per situation |
+| [Testing](docs/testing.md) | A fake `fetch`, canned answers, no crypto spent |
+| [Production checklist](docs/production-checklist.md) | Before real money |
+| [Call and result contract](docs/protocol-contract.md) | All 21 operations in one table |
+| [Examples](examples/) | Runnable, one operation per file |
+
+Full protocol docs: [p2flux.com/docs](https://p2flux.com/docs/) ·
+[OpenAPI](https://p2flux.com/openapi.json)
 
 ## Examples
 
-[`examples/`](examples/) — a one-time payment end to end (`one-time.ts`), a subscription from
-setup to cancellation (`subscription-setup.ts`), a refund (`refund.ts`), a renewal worker, a
-single charge with every branch handled, and cancellation.
-
-## A lost callback is recoverable
-
-If your checkout window dies between the wallet returning a transaction hash and your server
-recording it, the payment happened and your order looks unpaid. `recoverPayment` finds it again from
-the intent alone:
-
-```js
-const recovered = await p2flux.recoverPayment(intent)
-if (recovered.found && recovered.valid) markPaid(recovered.txHash)
-else if (recovered.found) pollAgainLater()          // still confirming; you have the hash now
-else keepWaiting()                                   // nothing settled AS OF recovered.asOfBlock
-```
-
-You supply the intent and nothing else — no hash, no hint. The match is bound to the exact payment
-that intent describes, so it can never return somebody else's transaction, and it works long after
-the intent expired: expiry stops a payment being *started*, not one that already happened.
-
-`PAYMENT_NOT_FOUND` is a statement about one block height, not a verdict. The contract does not
-enforce your intent's expiry, so a slow wallet can still settle afterwards and a later call will
-find it — stop polling on your own business rules, never on one not-found.
-
-## Refunds are the merchant's transaction
-
-A refund is a plain USDC transfer from your own wallet to the wallet that paid you. There is no
-refund contract, no relayer and no P2Flux custody in the path: P2Flux charges no refund fee, returns
-none of its original commission, and you pay the gas.
-
-```js
-const refund = await p2flux.prepareRefund({ intent, txHash }, '2500000')  // micro-USDC, integer
-// -> open your checkout at #/refund/<refund.refundToken> so your wallet can send it
-const result = await p2flux.verifyRefund({ intent, txHash }, '2500000', refundTxHash)
-if (result.refunded) markRefunded()
-else if (result.confirming) pollTheSameHashAgainLater()   // never send a second refund
-```
-
-`prepareRefund` derives the payer, the merchant, the token and the refundable maximum from the chain
-— you supply identifiers and an amount, and nothing else. There is no way to name a recipient, which
-is what keeps a refund from being a withdrawal.
-
-**P2Flux keeps no refund history.** It cannot tell you whether a payment has already been refunded,
-and calling `prepareRefund` twice will prepare two valid refunds. One refund per payment is your
-integration's rule to enforce, and the safe place is *before* preparing: reserve the order row
-atomically, then prepare. Reconciliation later uses `verifyRefund` with the original settlement, so
-the short-lived `refundToken` never needs storing.
-
-## Cancellation is the customer's transaction
-
-P2Flux cannot revoke a customer's on-chain authority. `prepareSubscriptionCancellation()` and
-`prepareAllowanceRevocation()` return calldata for the customer's own wallet to send — you surface
-it, they sign it.
-
-## Development
-
 ```bash
 npm install
-npm test          # offline: injected fetch, no API needed
-npm run typecheck
-npm run build     # -> dist/
+P2FLUX_RECIPIENT=0xYourPayoutWallet node --import tsx examples/create-payment.ts
 ```
 
-`dist/` is committed on release tags so the package installs from a git tag without running install
-scripts. It is build output; edit `src/`.
+Every example reads its configuration from the environment and fails with the missing variable's
+name. [`examples/complete-payment-flow/`](examples/complete-payment-flow/) is a runnable merchant
+integration — order, checkout handshake, repeat-safe verification — against a canned API, so no
+wallet or USDC is needed.
 
-The full integration suite — the SDK driven against a real API — lives in the private P2Flux/core
-repository, which pins this package by tag and exercises the published surface.
+## Scope
+
+This client covers the **complete public V1 merchant/server API** — the same surface as the PHP SDK
+(`p2flux/sdk-php`). One-time payments, verification with settlement receipts, lost-payment recovery,
+subscription setup / resolve / finalize / charge / status, recurring settlement recovery,
+cancellation, allowance revocation and repair, and refunds are all first-class typed methods. No raw
+REST calls are needed for a normal integration. The buyer-side wallet experience is the hosted
+checkout, not an SDK.
+
+**Parity is tested, not promised.** `test/parity.test.ts` holds the checked-in list of every public
+V1 operation and fails if any stops being reachable; the PHP SDK and P2Flux/core carry the same
+guard.
+
+## Testing
+
+Your own application never needs to spend crypto to be tested. `createP2Flux()` takes a `fetch`, so
+a fake replaces HTTP entirely:
+
+```ts
+const p2flux = createP2Flux({
+  apiUrl: 'https://api.example',
+  fetch: (async () => ({ status: 200, json: async () => ({ valid: true, tx_hash: '0xabc' }) })) as never,
+})
+```
+
+Recipes for every outcome worth a test: [Testing](docs/testing.md).
+
+This repository's own suite is offline and runs in seconds:
+
+```bash
+npm test        # client, surface, parity, dist integrity, examples, complete flow, documentation
+```
+
+## Requirements
+
+Node 18 or newer, or any runtime with a global `fetch`. ESM only. No runtime dependencies.
 
 ## License
 

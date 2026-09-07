@@ -1,16 +1,36 @@
 {
   "name": "@p2flux/sdk",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "JavaScript/TypeScript client for the P2Flux payments API.",
   "license": "MIT",
-  "type": "module",
+  "homepage": "https://p2flux.com/docs/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/P2Flux/sdk-js.git"
   },
+  "bugs": {
+    "url": "https://github.com/P2Flux/sdk-js/issues"
+  },
+  "keywords": [
+    "payments",
+    "usdc",
+    "stablecoin",
+    "base",
+    "subscriptions",
+    "recurring",
+    "checkout",
+    "erc20",
+    "web3"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,10 +40,14 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.7.2 - 2026-09-07
+
+Packaging, documentation and examples. **No behaviour changed**: every method keeps its name,
+arguments and return shape, and `dist/` is byte-identical to a fresh build of the same source.
+
+### Added
+
+- **Published to npm as `@p2flux/sdk`.** Installation is `npm install @p2flux/sdk` — no git tag to
+  pin. `package.json` gains the public metadata a registry page needs (homepage, bugs, keywords,
+  `engines: node >=18`, `publishConfig.access`) and `sideEffects: false`, which a new test earns
+  rather than assumes: importing the module is proven to leave `globalThis` untouched.
+- **`docs/payment-flow.md`** — the whole merchant lifecycle in one page, including the browser half
+  this SDK never sees: the checkout handshake, why `p2flux.payment.completed` is a claim, and how to
+  make the paid transition happen exactly once.
+- **`docs/server-and-browser.md`** — which half of a JavaScript application each thing belongs to,
+  and how to keep a bearer capability out of a client bundle. `NEXT_PUBLIC_*` and its equivalents
+  are named explicitly, because that is how a credential actually escapes.
+- **`docs/recovery.md`**, **`docs/testing.md`**, **`docs/production-checklist.md`**, and a recipes
+  section in **`docs/errors.md`** covering the situations rather than only the codes.
+- **`examples/complete-payment-flow/`** — a runnable merchant integration on `node:http`: order,
+  checkout handshake, repeat-safe verification, recovery fallback. It runs against a canned API, so
+  no wallet, USDC or chain is involved.
+- **`test/stub-api.ts`** — that canned API, exported as `startStubApi()` and runnable standalone. It
+  answers `PAYMENT_CONFIRMING` for a hash starting `0xc0` and `TRANSACTION_NOT_FOUND` for one
+  starting `0xbad`, so the waiting and rejection paths are reachable offline.
+- **Automated documentation and example tests.** `npm test` now also runs every example against the
+  canned API, drives the complete-flow demo end to end, checks that `dist/` matches a fresh build,
+  and validates every documented method, option, import, snippet, link and error code against the
+  source.
+
+### Changed
+
+- **Examples are one operation each**, all reading configuration from the environment and failing
+  with the missing variable's name: `create-payment.ts`, `create-sponsored-payment.ts`,
+  `verify-payment.ts`, `recover-payment.ts`, `network-fee-in-usdc.ts`, `subscription-signup.ts`,
+  `charge-subscription.ts`, `recover-charge.ts`, `renewal-worker.ts`, `refund.ts`, `cancel.ts`.
+  The `declare const` stubs are gone, so every example actually runs.
+- **The README** leads with the first successful integration: install, a five-minute payment, the
+  checkout flow, verify before fulfilling, USDC network fees, subscriptions, runtime support, then
+  links. Runtime support is stated plainly: an ESM-only package that CommonJS applications can load
+  with a dynamic `import()`, and a server-side client rather than a browser SDK.
+- **The integration guide is split** into `getting-started`, `payment-flow`, `payments`,
+  `network-fee-in-usdc`, `subscriptions`, `refunds`, `recovery`, `errors`, `testing`,
+  `production-checklist` and `server-and-browser`. `docs/guide.md` is now the index.
+
 ## 0.7.1 - 2026-09-06
 
 ### Added
