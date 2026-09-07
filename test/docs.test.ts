@@ -129,9 +129,18 @@ for (const { name, text, path } of documents) {
   })
 
   test(`${name}: no stale package name or version`, () => {
-    assert.doesNotMatch(text, /github:P2Flux\/sdk-js#/, 'the git-tag install route is gone')
-    assert.doesNotMatch(text, /not on npm/i)
-    assert.doesNotMatch(text, /p2flux\/p2flux-php/, 'the PHP package is p2flux/sdk-php')
+    /* Install routes that are no longer current. Both packages are on their own registry, and a page
+     * that still points at a git tag sends a developer down a route nobody maintains. */
+    for (const stale of [
+      'github:P2Flux/sdk-js#',
+      'npm install github:P2Flux/sdk-js',
+      'not on npm',
+      'not on packagist',
+      'p2flux/p2flux-php',
+      'composer require p2flux/p2flux-php',
+    ]) {
+      assert.ok(!text.toLowerCase().includes(stale.toLowerCase()), `${name} contains "${stale}"`)
+    }
 
     for (const [, version] of text.matchAll(/v?(0\.7\.\d+)\b/g)) {
       assert.equal(version, pkg.version, `${name} mentions ${version}; this repository is ${pkg.version}`)

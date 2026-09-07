@@ -1,6 +1,7 @@
 # P2Flux JavaScript SDK
 
 [![npm](https://img.shields.io/npm/v/@p2flux/sdk)](https://www.npmjs.com/package/@p2flux/sdk)
+[![node](https://img.shields.io/node/v/@p2flux/sdk)](https://www.npmjs.com/package/@p2flux/sdk)
 
 ```bash
 npm install @p2flux/sdk
@@ -216,6 +217,13 @@ This repository's own suite is offline and runs in seconds:
 ```bash
 npm test        # client, surface, parity, dist integrity, examples, complete flow, documentation
 ```
+
+## The other official SDK
+
+PHP: `composer require p2flux/sdk-php` —
+[Packagist](https://packagist.org/packages/p2flux/sdk-php) ·
+[GitHub](https://github.com/P2Flux/sdk-php). Same public operations, same semantics, same security
+model. The two are released independently, so their version numbers differ.
 
 ## Requirements
 
