@@ -1,0 +1,64 @@
+# Publishes @p2flux/sdk to npm when a GitHub Release is published.
+#
+# Deliberately NOT triggered by a push. A release is an act of intent; a merge is not, and a
+# workflow that publishes on every push to main is a workflow that eventually publishes something
+# nobody meant to ship.
+#
+# There is no npm token. Publication uses npm's trusted publishing over GitHub OIDC, scoped on the
+# npm side to this repository and this workflow file, so the credential exists only for the seconds
+# this job runs and cannot be stolen from a secret store.
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm exchanges for publish rights
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # npm's trusted publishing needs a recent CLI; the runner's bundled version may predate it.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # The tag is the source of truth for what is being released. A mismatch here means the tag and
+      # the manifest disagree, and publishing either one would be wrong.
+      - name: The tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json $VERSION" >&2
+            exit 1
+          fi
+
+      # The whole suite: client, surface, parity, dist integrity, examples, complete flow, docs.
+      - run: npm test
+      - run: npm run typecheck
+
+      # dist/ is committed because P2Flux/core pins this repository by commit. Rebuilding here and
+      # failing on any difference is what stops a stale dist from reaching the registry.
+      - name: The build reproduces the committed dist
+        run: |
+          npm run build
+          if ! git diff --quiet -- dist; then
+            echo "dist/ is stale - run npm run build and commit it" >&2
+            git --no-pager diff --stat -- dist
+            exit 1
+          fi
+
+      - run: npm pack --dry-run
+
+      - run: npm publish --provenance --access public
