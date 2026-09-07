@@ -5,8 +5,8 @@ dependencies, `fetch` injectable for tests and for hosts with their own HTTP sta
 
 This repository is the **canonical source** for the JS SDK. The full integration guide is
 [`docs/guide.md`](docs/guide.md); the call-and-result contract is
-[`docs/protocol-contract.md`](docs/protocol-contract.md). Version numbers are shared with the PHP
-SDK: both are v0.7.1 and expose the same public operations.
+[`docs/protocol-contract.md`](docs/protocol-contract.md). The PHP SDK
+(`p2flux/sdk-php`) exposes the same public operations.
 
 ```bash
 npm install github:P2Flux/sdk-js#v0.7.1     # not on npm; install from the tag
@@ -15,7 +15,7 @@ npm install github:P2Flux/sdk-js#v0.7.1     # not on npm; install from the tag
 ## Scope
 
 This client covers the **complete public V1 merchant/server API** — the same surface as the PHP
-SDK (`p2flux/p2flux-php`). One-time payments, verification with settlement receipts, lost-payment
+SDK (`p2flux/sdk-php`, `composer require p2flux/sdk-php`). One-time payments, verification with settlement receipts, lost-payment
 recovery, subscription setup / finalize / charge / status, cancellation, allowance revocation and
 refunds are all first-class typed methods: no raw REST calls are needed for a normal integration.
 The buyer-side wallet experience is the hosted checkout, not an SDK.

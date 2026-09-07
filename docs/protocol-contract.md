@@ -11,7 +11,7 @@ itself guarantees.
 ## Scope
 
 The **complete public V1 merchant/server API** — the same 18 operations as the PHP SDK
-(`p2flux/p2flux-php`), guarded by a checked-in parity test in both repositories
+(`p2flux/sdk-php`), guarded by a checked-in parity test in both repositories
 (`test/parity.test.ts` here). The buyer-side wallet experience is the hosted checkout
 (`https://pay.p2flux.com`), not an SDK.
 

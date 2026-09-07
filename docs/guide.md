@@ -3,9 +3,9 @@
 `@p2flux/sdk` v0.7.1. A thin, zero-dependency client over the P2Flux HTTP API: it normalizes result
 codes and nothing else. No scheduler, no storage, no retry loops — your application owns all three.
 
-The PHP SDK (`p2flux/p2flux-php`, also v0.7.1) covers the identical public protocol surface. Both
-SDKs share one version number, so "both at v0.7.1" means the same
-operations, the same semantics and the same security model in both languages.
+The PHP SDK (`p2flux/sdk-php`, installed with `composer require p2flux/sdk-php`) covers the
+identical public protocol surface: the same operations, the same semantics and the same security
+model in both languages.
 
 - [Installation](#installation)
 - [Environments](#environments)
