@@ -93,7 +93,7 @@ export function createPaywall(options: PaywallOptions) {
   const base = options.apiUrl.replace(/\/$/, '')
   const fetchImpl = options.fetch ?? globalThis.fetch
   const timeoutMs = options.timeoutMs ?? 25_000
-  const challenges = new Map<string, { accepts: unknown[]; until: number }>()
+  const challenges = new Map<string, { accepts: unknown[]; extensions?: unknown; until: number }>()
   // Payments this process already took: refused without asking P2Flux (which would refuse them too).
   const used = new Map<string, number>()
 
@@ -115,23 +115,25 @@ export function createPaywall(options: PaywallOptions) {
       ? { allow: true, paid: false, headers: {} }
       : { allow: false, status: 503, headers: { 'retry-after': '60', ...NO_STORE }, body: { error: 'payment_service_unavailable' } }
 
-  const accepts = async (price: string, usage = false): Promise<unknown[] | null> => {
+  const accepts = async (price: string, usage = false): Promise<{ accepts: unknown[]; extensions?: unknown } | null> => {
     const key = usage ? `upto:${price}` : price
     const hit = challenges.get(key)
-    if (hit && hit.until > Date.now()) return hit.accepts
+    if (hit && hit.until > Date.now()) return hit
     const res = await post('/x402/paywall/challenge', { recipient: options.recipient, price, ...(usage ? { usage: true } : {}) })
     if (res?.status === 400) throw new Error(`P2Flux refused the paywall configuration (recipient ${options.recipient}, price ${price}): ${String(res.body.error ?? 'INVALID_REQUEST')}`)
     if (!res || res.status !== 200 || !Array.isArray(res.body.accepts)) return null
     const list = options.prepaid === false ? res.body.accepts.filter((a) => (a as { scheme?: string })?.scheme !== 'batch-settlement') : res.body.accepts
     const ttl = Math.min(3600, Math.max(60, Number(res.body.ttl) || 600))
-    challenges.set(key, { accepts: list, until: Date.now() + ttl * 1000 })
-    return list
+    // `extensions` (usage pricing): what lets an agent without ETH pay. Passed on as P2Flux wrote it.
+    const entry = { accepts: list, ...(res.body.extensions ? { extensions: res.body.extensions } : {}), until: Date.now() + ttl * 1000 }
+    challenges.set(key, entry)
+    return entry
   }
 
   const required = async (input: GuardInput, price: string, error?: string, usage = false): Promise<GuardResult> => {
-    const list = await accepts(price, usage)
-    if (!list) return unavailable()
-    const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: list }
+    const offer = await accepts(price, usage)
+    if (!offer) return unavailable()
+    const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: offer.accepts, ...(offer.extensions ? { extensions: offer.extensions } : {}) }
     return { allow: false, status: 402, headers: { 'payment-required': b64(body), ...NO_STORE }, body }
   }
 

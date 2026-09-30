@@ -23,7 +23,7 @@ function api(over: { down?: boolean; badConfig?: boolean } = {}) {
     if (state.down) throw new Error('ECONNREFUSED')
     if (state.badConfig) return new Response(JSON.stringify({ error: 'INVALID_REQUEST' }), { status: 400 })
     if (path.endsWith('/challenge') && body.usage === true) {
-      return Response.json({ x402Version: 2, ttl: 3600, accepts: [{ scheme: 'upto', network: 'eip155:84532', amount: String(Math.round(Number(body.price) * 1e6)), payTo: '0xvault' }] })
+      return Response.json({ x402Version: 2, ttl: 3600, extensions: { eip2612GasSponsoring: { info: { version: '1' } } }, accepts: [{ scheme: 'upto', network: 'eip155:84532', amount: String(Math.round(Number(body.price) * 1e6)), payTo: '0xvault' }] })
     }
     if (path.endsWith('/verify')) {
       const vid = (decode(String(body.payment)) as { id: string }).id
@@ -228,6 +228,7 @@ test('usage: no payment - 402 offering upto for the maximum; the work does not r
   assert.equal(r.status, 402)
   assert.deepEqual(decode(r.headers['payment-required']!).accepts.map((x: { scheme: string; amount: string }) => [x.scheme, x.amount]), [['upto', '1000000']])
   assert.equal(ran, 0)
+  assert.equal(decode(r.headers['payment-required']!).extensions.eip2612GasSponsoring.info.version, '1')
   assert.deepEqual(a.calls[0], { path: '/x402/paywall/challenge', body: { recipient: WALLET, price: '1', usage: true } })
 })
 

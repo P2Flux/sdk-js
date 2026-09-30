@@ -78,7 +78,7 @@ export function createPaywall(options) {
         const key = usage ? `upto:${price}` : price;
         const hit = challenges.get(key);
         if (hit && hit.until > Date.now())
-            return hit.accepts;
+            return hit;
         const res = await post('/x402/paywall/challenge', { recipient: options.recipient, price, ...(usage ? { usage: true } : {}) });
         if (res?.status === 400)
             throw new Error(`P2Flux refused the paywall configuration (recipient ${options.recipient}, price ${price}): ${String(res.body.error ?? 'INVALID_REQUEST')}`);
@@ -86,14 +86,16 @@ export function createPaywall(options) {
             return null;
         const list = options.prepaid === false ? res.body.accepts.filter((a) => a?.scheme !== 'batch-settlement') : res.body.accepts;
         const ttl = Math.min(3600, Math.max(60, Number(res.body.ttl) || 600));
-        challenges.set(key, { accepts: list, until: Date.now() + ttl * 1000 });
-        return list;
+        // `extensions` (usage pricing): what lets an agent without ETH pay. Passed on as P2Flux wrote it.
+        const entry = { accepts: list, ...(res.body.extensions ? { extensions: res.body.extensions } : {}), until: Date.now() + ttl * 1000 };
+        challenges.set(key, entry);
+        return entry;
     };
     const required = async (input, price, error, usage = false) => {
-        const list = await accepts(price, usage);
-        if (!list)
+        const offer = await accepts(price, usage);
+        if (!offer)
             return unavailable();
-        const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: list };
+        const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: offer.accepts, ...(offer.extensions ? { extensions: offer.extensions } : {}) };
         return { allow: false, status: 402, headers: { 'payment-required': b64(body), ...NO_STORE }, body };
     };
     /** The framework-neutral core: decide one request. */
