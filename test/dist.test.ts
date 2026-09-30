@@ -21,7 +21,7 @@ test('dist matches a fresh build of src', () => {
   try {
     execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json', '--outDir', out], { cwd: root, stdio: 'pipe' })
 
-    for (const file of ['index.js', 'index.d.ts']) {
+    for (const file of ['index.js', 'index.d.ts', 'paywall.js', 'paywall.d.ts']) {
       assert.equal(
         readFileSync(join(out, file), 'utf8'),
         readFileSync(join(root, 'dist', file), 'utf8'),

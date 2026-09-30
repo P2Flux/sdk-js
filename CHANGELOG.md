@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 - unreleased
+
+### Added
+
+- **`@p2flux/sdk/paywall`** — charge AI agents for a route over x402 without an x402 library:
+  `createPaywall({ apiUrl, recipient, price })` with `express()` middleware, `wrap()` for Fetch-API
+  handlers, and the framework-neutral `guard()`. Pay-per-request and prepaid balance; the payment is
+  settled before the handler runs and serves one response. A separate entry point: the main client
+  is unchanged and byte-identical.
+
 ## 0.7.2 - 2026-09-07
 
 Packaging, documentation and examples. **No behaviour changed**: every method keeps its name,

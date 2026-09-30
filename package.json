@@ -1,6 +1,6 @@
 {
   "name": "@p2flux/sdk",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "JavaScript/TypeScript client for the P2Flux payments API.",
   "license": "MIT",
   "homepage": "https://p2flux.com/docs/",
@@ -20,7 +20,10 @@
     "recurring",
     "checkout",
     "erc20",
-    "web3"
+    "web3",
+    "x402",
+    "ai-agents",
+    "paywall"
   ],
   "type": "module",
   "sideEffects": false,
@@ -38,6 +41,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./paywall": {
+      "types": "./dist/paywall.d.ts",
+      "default": "./dist/paywall.js"
     }
   },
   "publishConfig": {

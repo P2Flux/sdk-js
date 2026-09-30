@@ -141,6 +141,33 @@ whether the charge landed. See [Subscriptions](docs/subscriptions.md).
 The `p2s2` capability it charges is a bearer credential: server-side only, encrypted at rest, never
 in a browser bundle. → [Server and browser](docs/server-and-browser.md)
 
+## Charge AI agents (x402 paywall)
+
+AI agents pay for an API route or a page in USDC, per request, with the open x402 standard. You add
+one line; P2Flux builds what the agent signs and settles what it sends — before your handler runs.
+
+```ts
+import { createPaywall } from '@p2flux/sdk/paywall'
+
+const paywall = createPaywall({
+  apiUrl: 'https://api.p2flux.com',   // https://api-test.p2flux.com for Base Sepolia
+  recipient: '0xYourWallet',
+  price: '0.05',                      // USDC per request, at least 0.01
+})
+
+app.get('/report', paywall.express(), (req, res) => res.json(report))              // Express
+export default { fetch: paywall.wrap((request) => new Response('paid content')) }  // Workers, Bun, Hono, Next
+```
+
+- A request without payment gets `402 Payment Required` with the price; the agent pays and repeats it.
+- One payment serves one response. The same payment sent again is refused.
+- Agents may pay per request (P2Flux keeps 1%, at least 0.003 USDC) or from a prepaid balance with no
+  transaction per request (3%). `prepaid: false` offers pay-per-request only.
+- `agentsOnly: true` charges AI agents and programs only; browsers and search engines pass free.
+- `paywall.guard({ url, paymentHeader, userAgent })` is the framework-neutral core.
+
+Money goes to your wallet; the fee is taken on chain. No account, no API key, no x402 library.
+
 ## Runtime support
 
 | | |
