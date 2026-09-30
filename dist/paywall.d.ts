@@ -55,7 +55,7 @@ export type GuardResult = {
     body: Record<string, unknown>;
 };
 /** AI crawlers and assistants, and HTTP libraries agents are built on. Same list as the WordPress plugin. */
-export declare const AGENT_SIGNATURES: readonly ["GPTBot", "ChatGPT-User", "OAI-SearchBot", "ClaudeBot", "Claude-User", "Claude-SearchBot", "anthropic-ai", "PerplexityBot", "Perplexity-User", "CCBot", "Bytespider", "Amazonbot", "meta-externalagent", "meta-externalfetcher", "cohere-ai", "cohere-training-data-crawler", "Diffbot", "YouBot", "DuckAssistBot", "MistralAI-User", "AI2Bot", "Timpibot", "ImagesiftBot", "Omgilibot", "Google-CloudVertexBot", "Kangaroo Bot", "PanguBot", "Novellum", "python-requests", "python-httpx", "aiohttp", "axios/", "node-fetch", "undici", "Go-http-client", "okhttp", "curl/", "Wget/", "Scrapy", "libwww-perl"];
+export declare const AGENT_SIGNATURES: readonly ["GPTBot", "ChatGPT-User", "OAI-SearchBot", "ClaudeBot", "Claude-User", "Claude-SearchBot", "anthropic-ai", "PerplexityBot", "Perplexity-User", "CCBot", "Bytespider", "Amazonbot", "meta-externalagent", "meta-externalfetcher", "cohere-ai", "cohere-training-data-crawler", "Diffbot", "YouBot", "DuckAssistBot", "MistralAI-User", "AI2Bot", "Timpibot", "ImagesiftBot", "Omgilibot", "Google-CloudVertexBot", "Kangaroo Bot", "PanguBot", "Novellum", "P2Flux-MCP", "x402", "python-requests", "python-httpx", "aiohttp", "axios/", "node-fetch", "undici", "Go-http-client", "okhttp", "curl/", "Wget/", "Scrapy", "libwww-perl"];
 /** Whether a request is an AI agent or a program rather than a person's browser. */
 export declare function isAgent(userAgent: string | null | undefined, hasPayment: boolean): boolean;
 /** The parts of an Express request and response the middleware uses. */
