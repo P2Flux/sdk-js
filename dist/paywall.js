@@ -57,6 +57,8 @@ export function createPaywall(options) {
     const challenges = new Map();
     // Payments this process already took: refused without asking P2Flux (which would refuse them too).
     const used = new Map();
+    // Usage payments whose work is running now.
+    const inFlight = new Set();
     const post = async (path, body) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -101,7 +103,7 @@ export function createPaywall(options) {
     /** The framework-neutral core: decide one request. */
     async function guard(input) {
         const price = input.price ?? options.price;
-        const header = input.paymentHeader ?? null;
+        const header = input.paymentHeader?.trim() ?? null;
         if (options.agentsOnly && !isAgent(input.userAgent, header !== null, Boolean(input.signatureAgent)))
             return { allow: true, paid: false, headers: {} };
         if (header === null)
@@ -162,7 +164,7 @@ export function createPaywall(options) {
      */
     async function usage(input, work) {
         const max = input.maxPrice;
-        const header = input.paymentHeader ?? null;
+        const header = input.paymentHeader?.trim() ?? null;
         const denied = (r) => r;
         if (options.agentsOnly && !isAgent(input.userAgent, header !== null, Boolean(input.signatureAgent)))
             return { allow: true, paid: false, headers: {}, value: (await work()).value };
@@ -170,8 +172,19 @@ export function createPaywall(options) {
             return denied(await required(input, max, undefined, true));
         if (header.length > MAX_HEADER || !/^[A-Za-z0-9+/]+={0,2}$/.test(header))
             return denied(await required(input, max, 'invalid_payload', true));
-        if ((used.get(header) ?? 0) > Date.now())
+        if ((used.get(header) ?? 0) > Date.now() || inFlight.has(header))
             return denied(await required(input, max, 'invalid_transaction_state', true));
+        // One payment runs the work once: a second request with the same header, while the first is still
+        // working, would pass verify too - and the work would be done twice for one settlement.
+        inFlight.add(header);
+        try {
+            return await usageOnce(input, max, header, work, denied);
+        }
+        finally {
+            inFlight.delete(header);
+        }
+    }
+    async function usageOnce(input, max, header, work, denied) {
         const body = { recipient: options.recipient, price: max, payment: header };
         const verified = await post('/x402/paywall/verify', body);
         if (verified?.status === 400)

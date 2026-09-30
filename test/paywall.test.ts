@@ -279,3 +279,17 @@ test('agentsOnly: a request signed as a bot pays even with a browser user agent;
   assert.equal(isAgent(chrome, false, true), true)
   assert.equal(isAgent('Mozilla/5.0 (compatible; Googlebot/2.1)', false, true), false)
 })
+
+test('usage: the same payment sent twice at once runs the work once', async () => {
+  const a = api()
+  let ran = 0
+  const p = paywallOn(a)
+  const work = async () => {
+    ran++
+    await new Promise((r) => setTimeout(r, 30))
+    return { amount: '0.2', value: 'x' }
+  }
+  const [x, y] = await Promise.all([p.usage({ url: URL_, maxPrice: '1', paymentHeader: pay('twice-1') }, work), p.usage({ url: URL_, maxPrice: '1', paymentHeader: ` ${pay('twice-1')} ` }, work)])
+  assert.equal(ran, 1)
+  assert.deepEqual([x.allow, y.allow].sort(), [false, true])
+})

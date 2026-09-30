@@ -96,6 +96,8 @@ export function createPaywall(options: PaywallOptions) {
   const challenges = new Map<string, { accepts: unknown[]; extensions?: unknown; until: number }>()
   // Payments this process already took: refused without asking P2Flux (which would refuse them too).
   const used = new Map<string, number>()
+  // Usage payments whose work is running now.
+  const inFlight = new Set<string>()
 
   const post = async (path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> } | null> => {
     const controller = new AbortController()
@@ -140,7 +142,7 @@ export function createPaywall(options: PaywallOptions) {
   /** The framework-neutral core: decide one request. */
   async function guard(input: GuardInput): Promise<GuardResult> {
     const price = input.price ?? options.price
-    const header = input.paymentHeader ?? null
+    const header = input.paymentHeader?.trim() ?? null
     if (options.agentsOnly && !isAgent(input.userAgent, header !== null, Boolean(input.signatureAgent))) return { allow: true, paid: false, headers: {} }
     if (header === null) return required(input, price)
     if (header.length > MAX_HEADER || !/^[A-Za-z0-9+/]+={0,2}$/.test(header)) return required(input, price, 'invalid_payload')
@@ -198,13 +200,23 @@ export function createPaywall(options: PaywallOptions) {
    */
   async function usage<T>(input: Omit<GuardInput, 'price'> & { maxPrice: string }, work: () => Promise<{ amount: string; value: T }>): Promise<UsageResult<T>> {
     const max = input.maxPrice
-    const header = input.paymentHeader ?? null
+    const header = input.paymentHeader?.trim() ?? null
     const denied = (r: GuardResult) => r as Denied
     if (options.agentsOnly && !isAgent(input.userAgent, header !== null, Boolean(input.signatureAgent))) return { allow: true, paid: false, headers: {}, value: (await work()).value }
     if (header === null) return denied(await required(input, max, undefined, true))
     if (header.length > MAX_HEADER || !/^[A-Za-z0-9+/]+={0,2}$/.test(header)) return denied(await required(input, max, 'invalid_payload', true))
-    if ((used.get(header) ?? 0) > Date.now()) return denied(await required(input, max, 'invalid_transaction_state', true))
+    if ((used.get(header) ?? 0) > Date.now() || inFlight.has(header)) return denied(await required(input, max, 'invalid_transaction_state', true))
+    // One payment runs the work once: a second request with the same header, while the first is still
+    // working, would pass verify too - and the work would be done twice for one settlement.
+    inFlight.add(header)
+    try {
+      return await usageOnce(input, max, header, work, denied)
+    } finally {
+      inFlight.delete(header)
+    }
+  }
 
+  async function usageOnce<T>(input: Omit<GuardInput, 'price'>, max: string, header: string, work: () => Promise<{ amount: string; value: T }>, denied: (r: GuardResult) => Denied): Promise<UsageResult<T>> {
     const body = { recipient: options.recipient, price: max, payment: header }
     const verified = await post('/x402/paywall/verify', body)
     if (verified?.status === 400) throw new Error(`P2Flux refused the paywall configuration: ${String(verified.body.error ?? 'INVALID_REQUEST')}`)
