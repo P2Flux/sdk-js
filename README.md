@@ -165,6 +165,27 @@ export default { fetch: paywall.wrap((request) => new Response('paid content')) 
   transaction per request (3%). `prepaid: false` offers pay-per-request only.
 - `agentsOnly: true` charges AI agents and programs only; browsers and search engines pass free.
 - `paywall.guard({ url, paymentHeader, userAgent })` is the framework-neutral core.
+- A request signed as a bot (Web Bot Auth, a `Signature-Agent` header) counts as an agent under
+  `agentsOnly`, whatever its user agent says.
+- An agent's request to take back its unused prepaid balance is answered for you (its receipt, no content).
+
+**Usage pricing** - when a request's cost is known only after the work (tokens, rows, seconds). The
+agent signs for at most `maxPrice`; you charge what it cost, at least 0.01:
+
+```js
+const result = await paywall.usage(
+  { url: request.url, paymentHeader: request.headers.get('payment-signature'), maxPrice: '1' },
+  async () => {
+    const rows = await runQuery()
+    return { amount: (rows.length * 0.001).toFixed(6), value: rows }
+  },
+)
+if (!result.allow) return new Response(JSON.stringify(result.body), { status: result.status, headers: result.headers })
+return Response.json(result.value, { headers: result.headers })
+```
+
+The work runs only after P2Flux confirmed the payment will settle. If the settlement then fails, the
+result is not returned.
 
 Money goes to your wallet; the fee is taken on chain. No account, no API key, no x402 library.
 

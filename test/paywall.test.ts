@@ -22,6 +22,19 @@ function api(over: { down?: boolean; badConfig?: boolean } = {}) {
     calls.push({ path, body })
     if (state.down) throw new Error('ECONNREFUSED')
     if (state.badConfig) return new Response(JSON.stringify({ error: 'INVALID_REQUEST' }), { status: 400 })
+    if (path.endsWith('/challenge') && body.usage === true) {
+      return Response.json({ x402Version: 2, ttl: 3600, accepts: [{ scheme: 'upto', network: 'eip155:84532', amount: String(Math.round(Number(body.price) * 1e6)), payTo: '0xvault' }] })
+    }
+    if (path.endsWith('/verify')) {
+      const vid = (decode(String(body.payment)) as { id: string }).id
+      return Response.json(vid.startsWith('bad-') ? { valid: false, reason: 'invalid_upto_evm_insufficient_allowance' } : { valid: true, payer: '0xagent' })
+    }
+    if (path.endsWith('/redeem') && body.amount !== undefined) {
+      const uid = (decode(String(body.payment)) as { id: string }).id
+      if (Number(body.amount) > Number(body.price)) return new Response(JSON.stringify({ error: 'INVALID_REQUEST' }), { status: 400 })
+      if (uid.startsWith('late-')) return Response.json({ paid: false, reason: 'invalid_upto_evm_insufficient_balance' })
+      return Response.json({ paid: true, scheme: 'upto', amount: String(Math.round(Number(body.amount) * 1e6)), transaction: `0x${'cd'.repeat(32)}`, payer: '0xagent', payment_response: b64({ success: true }) })
+    }
     if (path.endsWith('/challenge')) {
       return Response.json({ x402Version: 2, ttl: 3600, accepts: [
         { scheme: 'exact', network: 'eip155:84532', amount: String(Math.round(Number(body.price) * 1e6)), payTo: '0xvault' },
@@ -31,6 +44,7 @@ function api(over: { down?: boolean; badConfig?: boolean } = {}) {
     const id = (decode(String(body.payment)) as { id: string }).id
     if (id.startsWith('bad-')) return Response.json({ paid: false, reason: 'invalid_exact_evm_insufficient_balance' })
     if (id.startsWith('stale-')) return Response.json({ paid: false, reason: 'batch_stale', payment_required: b64({ x402Version: 2, error: 'batch_stale', accepts: [{ extra: { channelState: { charged: '150000' } } }] }) })
+    if (id.startsWith('refund-')) return Response.json({ paid: false, refunded: true, reason: 'refunded', payment_response: b64({ success: true, refund: true }) })
     if (usedIds.has(id)) return Response.json({ paid: false, reason: 'invalid_transaction_state' })
     usedIds.add(id)
     return Response.json({ paid: true, transaction: `0x${'ab'.repeat(32)}`, payer: '0xagent', scheme: 'exact', payment_response: b64({ success: true }) })
@@ -107,6 +121,16 @@ test('a refused payment is a 402 with the reason; a prepaid refusal forwards P2F
     assert.equal(forwarded.accepts[0].extra.channelState.charged, '150000')
     assert.equal((stale.body as { error: string }).error, 'batch_stale')
   } else assert.fail('allowed')
+})
+
+test('a refund of the prepaid balance is answered with its receipt and no content', async () => {
+  const back = await paywallOn(api()).guard({ url: URL_, paymentHeader: pay('refund-1') })
+  assert.equal(back.allow, false)
+  if (!back.allow) {
+    assert.equal(back.status, 200)
+    assert.equal(decode(back.headers['payment-response']!).refund, true)
+    assert.deepEqual(back.body, { refunded: true })
+  }
 })
 
 test('a header that is not base64, or too long, is refused without asking P2Flux to settle', async () => {
@@ -191,4 +215,66 @@ test('express: next() only after payment; 402 and headers otherwise; errors go t
   assert.ok(paid.headers['payment-response'])
   const broken = await run(paywallOn(api({ badConfig: true })), {})
   assert.ok(broken.next instanceof Error)
+})
+
+// --- usage pricing ---------------------------------------------------------------------------------
+
+test('usage: no payment - 402 offering upto for the maximum; the work does not run', async () => {
+  const a = api()
+  let ran = 0
+  const r = await paywallOn(a).usage({ url: URL_, maxPrice: '1' }, async () => ({ amount: String(++ran), value: 'x' }))
+  assert.equal(r.allow, false)
+  if (r.allow) return
+  assert.equal(r.status, 402)
+  assert.deepEqual(decode(r.headers['payment-required']!).accepts.map((x: { scheme: string; amount: string }) => [x.scheme, x.amount]), [['upto', '1000000']])
+  assert.equal(ran, 0)
+  assert.deepEqual(a.calls[0], { path: '/x402/paywall/challenge', body: { recipient: WALLET, price: '1', usage: true } })
+})
+
+test('usage: verified first, then the work, then charged what it cost', async () => {
+  const a = api()
+  const r = await paywallOn(a).usage({ url: URL_, maxPrice: '1', paymentHeader: pay('u-1') }, async () => ({ amount: '0.23', value: { rows: 23 } }))
+  assert.equal(r.allow, true)
+  if (!r.allow) return
+  assert.deepEqual(r.value, { rows: 23 })
+  assert.equal(r.amount, '230000')
+  assert.ok(r.headers['payment-response'])
+  assert.deepEqual(a.calls.map((c) => c.path), ['/x402/paywall/verify', '/x402/paywall/redeem'])
+  assert.equal(a.calls[1]!.body.amount, '0.23')
+  assert.equal(a.calls[1]!.body.price, '1')
+})
+
+test('usage: a payment that would not settle never starts the work; one that fails after it returns nothing', async () => {
+  const a = api()
+  let ran = 0
+  const work = async () => ({ amount: '0.5', value: `SECRET-${++ran}` })
+  const bad = await paywallOn(a).usage({ url: URL_, maxPrice: '1', paymentHeader: pay('bad-1') }, work)
+  assert.equal(bad.allow, false)
+  assert.equal(ran, 0)
+  if (!bad.allow) assert.equal(decode(bad.headers['payment-required']!).error, 'invalid_upto_evm_insufficient_allowance')
+  const late = await paywallOn(a).usage({ url: URL_, maxPrice: '1', paymentHeader: pay('late-1') }, work)
+  assert.equal(late.allow, false)
+  assert.equal(ran, 1)
+  assert.doesNotMatch(JSON.stringify(late), /SECRET/)
+})
+
+test('usage: charging above the maximum is a programming error, and nothing is returned', async () => {
+  const a = api()
+  await assert.rejects(paywallOn(a).usage({ url: URL_, maxPrice: '1', paymentHeader: pay('u-2') }, async () => ({ amount: '1.5', value: 'x' })), /usage amount 1.5/)
+})
+
+test('usage: P2Flux down - refused by default, and the work does not run', async () => {
+  const a = api({ down: true })
+  let ran = 0
+  const r = await paywallOn(a).usage({ url: URL_, maxPrice: '1', paymentHeader: pay('u-3') }, async () => ({ amount: String(++ran), value: 'x' }))
+  assert.equal(r.allow, false)
+  if (!r.allow) assert.equal(r.status, 503)
+  assert.equal(ran, 0)
+})
+
+test('agentsOnly: a request signed as a bot pays even with a browser user agent; a search engine never', () => {
+  const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'
+  assert.equal(isAgent(chrome, false), false)
+  assert.equal(isAgent(chrome, false, true), true)
+  assert.equal(isAgent('Mozilla/5.0 (compatible; Googlebot/2.1)', false, true), false)
 })

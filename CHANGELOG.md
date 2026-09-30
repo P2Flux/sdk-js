@@ -9,6 +9,10 @@
   handlers, and the framework-neutral `guard()`. Pay-per-request and prepaid balance; the payment is
   settled before the handler runs and serves one response. A separate entry point: the main client
   is unchanged and byte-identical.
+- **Usage pricing** — `paywall.usage({ url, paymentHeader, maxPrice }, work)`: the agent signs for at
+  most `maxPrice` (x402 `upto`), you charge what the request cost.
+- Requests signed as bots (Web Bot Auth) count as agents under `agentsOnly`; an agent's prepaid
+  refund request is answered with its receipt.
 
 ## 0.7.2 - 2026-09-07
 
