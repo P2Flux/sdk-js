@@ -22,6 +22,7 @@ This page is the index. The guide was split into one page per topic in the relea
 | [Subscriptions](subscriptions.md) | Setup, the checkout handoff, charging, outcomes, allowance repair, cancellation |
 | [Refunds](refunds.md) | Merchant-sent transfers, verified by P2Flux |
 | [Recovery](recovery.md) | A lost payment, a lost charge, and the ambiguous request |
+| [Charge AI agents](paywall.md) | `@p2flux/sdk/paywall`: x402 paywall, options, result shape, prepaid, test to live |
 
 ## Building it
 
@@ -47,6 +48,7 @@ This page is the index. The guide was split into one page per topic in the relea
 | [`renewal-worker.ts`](../examples/renewal-worker.ts) | A renewal pass over many subscriptions |
 | [`refund.ts`](../examples/refund.ts) | Prepare, send from your wallet, verify |
 | [`cancel.ts`](../examples/cancel.ts) | A browser-safe cancellation session |
+| [`paywall-express.mjs`](../examples/paywall-express.mjs) | Charge AI agents for Express routes |
 | [`complete-payment-flow/`](../examples/complete-payment-flow/) | A runnable merchant integration |
 
 The PHP SDK (`p2flux/sdk-php`) covers the identical public protocol surface. The full protocol

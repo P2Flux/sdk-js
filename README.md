@@ -23,6 +23,7 @@ retry loops — you already have those.
 - **Buyers with no ETH.** Optionally, the buyer pays the network fee in USDC instead of holding the
   chain's native currency.
 - **Refunds.** A plain transfer from your wallet, verified by P2Flux, which never holds the money.
+- **AI agents.** `@p2flux/sdk/paywall` charges AI agents per request over x402. Live on Base mainnet.
 
 ## Five-minute payment
 
@@ -188,6 +189,7 @@ The work runs only after P2Flux confirmed the payment will settle. If the settle
 result is not returned.
 
 Money goes to your wallet; the fee is taken on chain. No account, no API key, no x402 library.
+Every option, the result shape and the test-to-live checklist: [Charge AI agents](docs/paywall.md).
 
 ## Runtime support
 
