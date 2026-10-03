@@ -39,6 +39,7 @@ const REQUIRED_OPERATIONS = [
   // Payment links.
   '/v1/links',
   '/v1/links/open',
+  '/v1/links/subscribe',
   '/v1/links/status',
   '/v1/links/collect',
   '/v1/links/stop',
@@ -81,6 +82,7 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
   })
   await p2flux.createPaymentLink({ kind: 'once', recipient: '0x' + '33'.repeat(20), amount: '1.00' })
   await p2flux.openPaymentLink('p2l1.x')
+  await p2flux.subscribePaymentLink('p2l1.x', 'p2s2.x')
   await p2flux.paymentLinkStatus({ manage: 'p2lm1.x' })
   await p2flux.collectPaymentLink('p2lm1.x', HASH)
   await p2flux.stopPaymentLink('p2lm1.x', HASH)

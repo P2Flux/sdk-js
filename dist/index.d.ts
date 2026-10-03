@@ -504,10 +504,8 @@ export type PaymentLinkSubscriber = {
     payer: string;
     state: 'active' | 'stopped' | 'suspended' | 'ended';
     startedAt: number;
-    /** The last period collected, -1 before the first. */
+    /** The last period collected (counting from 0). */
     lastPeriod: number;
-    /** How many periods have been collected. */
-    paidPeriods?: number;
     lastTx?: string;
     nextAttemptAt?: number;
     lastCode?: string;
@@ -682,6 +680,14 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * (subscriptions). Only needed for a checkout of your own; the P2Flux checkout calls it itself.
      */
     openPaymentLink(link: string, payer?: string): Promise<Record<string, unknown>>;
+    /**
+     * For a checkout of your own: join a subscription link with the capability the buyer just signed
+     * (finalizeSubscription). P2Flux charges the first period at once and keeps the subscription only
+     * when that charge landed or is on its way. Same answers as `charge()`, never throws.
+     */
+    subscribePaymentLink(link: string, subscriptionRef: string): Promise<ChargeResult & {
+        collectedBy?: "p2flux" | "merchant";
+    }>;
     /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
     paymentLinkStatus(token: {
         link: string;

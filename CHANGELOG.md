@@ -6,7 +6,7 @@
 
 - **Payment links** - `createPaymentLink(terms)`, `paymentLinkStatus({ link } | { manage })`,
   `collectPaymentLink(manage, subscriptionId)`, `stopPaymentLink(manage, subscriptionId)` and, for
-  custom checkouts, `openPaymentLink(link, payer?)`. Invoices paid once, fixed prices paid many
+  custom checkouts, `openPaymentLink(link, payer?)` and `subscribePaymentLink(link, subscriptionRef)`. Invoices paid once, fixed prices paid many
   times, and subscriptions P2Flux collects for you - no server needed.
   (https://p2flux.com/docs/payment-links.html)
 - `checkoutLink('link' | 'links', token)` for the buyer's link and the merchant's overview.

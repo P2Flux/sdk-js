@@ -730,10 +730,8 @@ export type PaymentLinkSubscriber = {
   payer: string
   state: 'active' | 'stopped' | 'suspended' | 'ended'
   startedAt: number
-  /** The last period collected, -1 before the first. */
+  /** The last period collected (counting from 0). */
   lastPeriod: number
-  /** How many periods have been collected. */
-  paidPeriods?: number
   lastTx?: string
   nextAttemptAt?: number
   lastCode?: string
@@ -1318,6 +1316,17 @@ export function createP2Flux(options: P2FluxOptions) {
       return postOrThrow('/v1/links/open', { link, ...(payer ? { payer } : {}) })
     },
 
+    /**
+     * For a checkout of your own: join a subscription link with the capability the buyer just signed
+     * (finalizeSubscription). P2Flux charges the first period at once and keeps the subscription only
+     * when that charge landed or is on its way. Same answers as `charge()`, never throws.
+     */
+    async subscribePaymentLink(link: string, subscriptionRef: string): Promise<ChargeResult & { collectedBy?: 'p2flux' | 'merchant' }> {
+      const result = await chargeAt('/v1/links/subscribe', { link, subscription: subscriptionRef })
+      const by = result.raw.collected_by as 'p2flux' | 'merchant' | undefined
+      return { ...result, ...(by ? { collectedBy: by } : {}) }
+    },
+
     /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
     async paymentLinkStatus(token: { link: string } | { manage: string }): Promise<PaymentLinkStatus> {
       const body = await postOrThrow('/v1/links/status', token)
@@ -1340,7 +1349,6 @@ export function createP2Flux(options: P2FluxOptions) {
                 state: s.state as PaymentLinkSubscriber['state'],
                 startedAt: s.started_at as number,
                 lastPeriod: s.last_period as number,
-                ...(s.paid_periods === undefined ? {} : { paidPeriods: s.paid_periods as number }),
                 ...(s.last_tx ? { lastTx: s.last_tx as string } : {}),
                 ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at as number } : {}),
                 ...(s.last_code ? { lastCode: s.last_code as string } : {}),

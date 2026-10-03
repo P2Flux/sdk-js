@@ -598,6 +598,16 @@ export function createP2Flux(options) {
         async openPaymentLink(link, payer) {
             return postOrThrow('/v1/links/open', { link, ...(payer ? { payer } : {}) });
         },
+        /**
+         * For a checkout of your own: join a subscription link with the capability the buyer just signed
+         * (finalizeSubscription). P2Flux charges the first period at once and keeps the subscription only
+         * when that charge landed or is on its way. Same answers as `charge()`, never throws.
+         */
+        async subscribePaymentLink(link, subscriptionRef) {
+            const result = await chargeAt('/v1/links/subscribe', { link, subscription: subscriptionRef });
+            const by = result.raw.collected_by;
+            return { ...result, ...(by ? { collectedBy: by } : {}) };
+        },
         /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
         async paymentLinkStatus(token) {
             const body = await postOrThrow('/v1/links/status', token);
@@ -620,7 +630,6 @@ export function createP2Flux(options) {
                             state: s.state,
                             startedAt: s.started_at,
                             lastPeriod: s.last_period,
-                            ...(s.paid_periods === undefined ? {} : { paidPeriods: s.paid_periods }),
                             ...(s.last_tx ? { lastTx: s.last_tx } : {}),
                             ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at } : {}),
                             ...(s.last_code ? { lastCode: s.last_code } : {}),
