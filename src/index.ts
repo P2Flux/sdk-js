@@ -691,7 +691,7 @@ export type PaymentLinkTerms = {
   expiresAt?: number
   /** One-time kinds: the buyer pays the network fee in USDC (no ETH needed). Fixed for the link's life. */
   gasPaymentMode?: GasPaymentMode
-  /** Subscriptions: seconds between charges, at least one day. */
+  /** Subscriptions: seconds between charges, at least one day; the amount at least 1 USDC. */
   period?: number
   /** Subscriptions: number of charges; omit for until cancelled. */
   periods?: number
@@ -752,7 +752,7 @@ export type PaymentLinkStatus = PaymentLinkTermsView & {
   payment?: PaymentLinkPayment
   /** Reusable links, with the manage token: payments read from the chain so far. */
   payments?: PaymentLinkPayment[]
-  /** Everything up to a few seconds ago has been read; ask again for more when false. */
+  /** Everything up to the chain's safe block has been read; ask again for more when false. */
   complete?: boolean
   subscribers?: PaymentLinkSubscriber[]
   raw: Record<string, unknown>
