@@ -14,7 +14,7 @@
  * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
-export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT';
+export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_LINK' | 'LINK_EXPIRED' | 'LINK_UNAVAILABLE' | 'ALREADY_SUBSCRIBED' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT';
 export type MerchantAction = 'SUCCESS' | 'WAIT' | 'RETRY_LATER' | 'CUSTOMER_ACTION_REQUIRED' | 'STOP_SUBSCRIPTION' | 'INVALID_REQUEST';
 export type ChargeResult = {
     status: ChargeStatus;
@@ -449,6 +449,71 @@ export declare class P2FluxError extends Error {
     readonly raw: Record<string, unknown>;
     constructor(status: ChargeStatus, action: MerchantAction, raw?: Record<string, unknown>);
 }
+/** Payment links: an invoice paid once, a fixed price paid many times, or a subscription P2Flux collects. */
+export type PaymentLinkKind = 'once' | 'reusable' | 'subscription';
+export type PaymentLinkTerms = {
+    kind: PaymentLinkKind;
+    recipient: string;
+    /** Decimal USDC, e.g. "10.00". */
+    amount: string;
+    /** Optional note for the buyer, up to 60 characters, no web or mail addresses. */
+    label?: string;
+    /** Unix seconds. Default 7 days for an invoice, a year otherwise. */
+    expiresAt?: number;
+    /** One-time kinds: the buyer pays the network fee in USDC (no ETH needed). Fixed for the link's life. */
+    gasPaymentMode?: GasPaymentMode;
+    /** Subscriptions: seconds between charges, at least one day. */
+    period?: number;
+    /** Subscriptions: number of charges; omit for until cancelled. */
+    periods?: number;
+};
+export type PaymentLink = {
+    /** The public link token. Send `checkoutLink('link', link)` to buyers. */
+    link: string;
+    /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
+    manage: string;
+    kind: PaymentLinkKind;
+    id: string;
+    recipient: string;
+    amount: string;
+    amountUnits: string;
+    label?: string;
+    createdAt: number;
+    expiresAt: number;
+    raw: Record<string, unknown>;
+};
+export type PaymentLinkPayment = {
+    txHash: string;
+    blockNumber: string;
+    reference: string;
+    amountUnits: string;
+    payer?: string;
+    timestamp?: number;
+};
+export type PaymentLinkSubscriber = {
+    subscriptionId: string;
+    payer: string;
+    state: 'active' | 'stopped' | 'suspended' | 'ended';
+    startedAt: number;
+    /** The last period collected, -1 before the first. */
+    lastPeriod: number;
+    lastTx?: string;
+    nextAttemptAt?: number;
+    lastCode?: string;
+};
+export type PaymentLinkStatus = {
+    kind: PaymentLinkKind;
+    state: 'open' | 'expired';
+    /** Invoices: paid or not. */
+    paid?: boolean;
+    payment?: PaymentLinkPayment;
+    /** Reusable links, with the manage token: payments read from the chain so far. */
+    payments?: PaymentLinkPayment[];
+    /** Everything up to a few seconds ago has been read; ask again for more when false. */
+    complete?: boolean;
+    subscribers?: PaymentLinkSubscriber[];
+    raw: Record<string, unknown>;
+};
 export type P2FluxOptions = {
     apiUrl: string;
     /**
@@ -468,7 +533,8 @@ export type P2FluxOptions = {
     checkoutUrl?: string;
 };
 /** The pages of the checkout a link can open. */
-export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve';
+/** `link` opens a payment link for a buyer; `links` is the merchant's private overview of one. */
+export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve' | 'link' | 'links';
 /**
  * The two messages a customer with no native currency signs to set their allowance, and the price
  * of the transaction that carries them. Both are complete EIP-712 payloads - pass them to the
@@ -588,6 +654,29 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * timeout or a crash returns ALREADY_CHARGED instead of charging again.
      */
     charge(subscriptionRef: string): Promise<ChargeResult>;
+    /**
+     * Create a payment link - nothing is stored. Send `checkoutLink('link', link.link)` to buyers
+     * (e-mail, chat, QR); keep `link.manage` for yourself.
+     */
+    createPaymentLink(terms: PaymentLinkTerms): Promise<PaymentLink>;
+    /**
+     * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token
+     * (subscriptions). Only needed for a checkout of your own; the P2Flux checkout calls it itself.
+     */
+    openPaymentLink(link: string, payer?: string): Promise<Record<string, unknown>>;
+    /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
+    paymentLinkStatus(token: {
+        link: string;
+    } | {
+        manage: string;
+    }): Promise<PaymentLinkStatus>;
+    /** "Collect now" for one subscriber of your subscription link. Same answers as `charge()`. */
+    collectPaymentLink(manage: string, subscriptionId: string): Promise<ChargeResult>;
+    /** Stop collecting one subscriber (reversible with `collectPaymentLink`). Only the buyer can revoke on chain. */
+    stopPaymentLink(manage: string, subscriptionId: string): Promise<{
+        subscriptionId: string;
+        state: string;
+    }>;
     /** Current state, read straight from the chain. Use it to reconcile after downtime. */
     status(subscriptionRef: string): Promise<SubscriptionStatus>;
     /**

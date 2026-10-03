@@ -35,6 +35,10 @@ The **complete public V1 merchant/server API** — the same 18 operations as the
 | `prepareAllowanceRevocation()` | Calldata for the global allowance stop. |
 | `createAllowanceRestoreSession(ref)` / `resolveAllowanceRestore(token)` | `INSUFFICIENT_ALLOWANCE` is not a dead subscription: the signed authorization is intact and one `approve()` fixes it. The session is the narrowest token P2Flux issues — it cannot charge, revoke or refund — and opens `#/approve/<approveToken>`. |
 | `prepareRefund(original, amountUnits)` / `resolveRefund(refundToken)` / `verifyRefund(original, amountUnits, refundTxHash)` | Merchant-sent refunds, verified by P2Flux. |
+| `createPaymentLink(terms)` | `{kind, recipient, amount, label?, expiresAt?, gasPaymentMode?, period?, periods?}` → a signed `link` for buyers (`checkoutLink('link', link)`) and a private `manage` token (`checkoutLink('links', manage)`). Nothing is stored. `once` is an invoice the contract lets settle only once; `reusable` a fixed price; `subscription` a plan P2Flux collects for you. |
+| `openPaymentLink(link, payer?)` | For a checkout of your own: the intent or setup token a link opens into. The P2Flux checkout calls it itself. |
+| `paymentLinkStatus({link} \| {manage})` | Invoice paid or not; with `manage`, every payment read from chain (`complete: false` → ask again) or every subscriber. |
+| `collectPaymentLink(manage, subscriptionId)` / `stopPaymentLink(manage, subscriptionId)` | "Collect now" (a `ChargeResult`, never throws) and "stop collecting" (reversible) for one subscriber of a subscription link. |
 
 The two `prepare*` calls return unsigned calldata. P2Flux cannot revoke wallet authority and does
 not pretend to: only the payer's wallet can send those transactions.

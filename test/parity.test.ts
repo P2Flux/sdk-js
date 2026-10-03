@@ -36,6 +36,12 @@ const REQUIRED_OPERATIONS = [
   '/v1/capabilities',
   '/v1/payments/sponsor',
   '/v1/allowances/restore/submit',
+  // Payment links.
+  '/v1/links',
+  '/v1/links/open',
+  '/v1/links/status',
+  '/v1/links/collect',
+  '/v1/links/stop',
 ]
 
 test('every public V1 merchant operation is reachable through the SDK', async () => {
@@ -73,6 +79,11 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
     permitSignature: '0x00',
     networkFeeSignature: '0x00',
   })
+  await p2flux.createPaymentLink({ kind: 'once', recipient: '0x' + '33'.repeat(20), amount: '1.00' })
+  await p2flux.openPaymentLink('p2l1.x')
+  await p2flux.paymentLinkStatus({ manage: 'p2lm1.x' })
+  await p2flux.collectPaymentLink('p2lm1.x', HASH)
+  await p2flux.stopPaymentLink('p2lm1.x', HASH)
 
   assert.deepEqual([...seen].sort(), [...REQUIRED_OPERATIONS].sort())
 })

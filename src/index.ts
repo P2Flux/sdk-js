@@ -88,6 +88,12 @@ export type ChargeStatus =
   | 'INVALID_INTENT'
   | 'INTENT_EXPIRED'
   | 'INVALID_REFERENCE'
+  /* Payment links: a link this deployment did not sign, one past its date, a kind not offered (or
+   * its contract replaced, or the subscription store full), and a wallet already subscribed. */
+  | 'INVALID_LINK'
+  | 'LINK_EXPIRED'
+  | 'LINK_UNAVAILABLE'
+  | 'ALREADY_SUBSCRIBED'
   | 'INVALID_SETUP_TOKEN'
   | 'SETUP_TOKEN_EXPIRED'
   | 'INVALID_CANCEL_TOKEN'
@@ -665,7 +671,84 @@ const ACTIONS: Record<string, MerchantAction> = {
   /* In flight: the buyer's authorization may already be spent, so the answer is to look the
    * settlement up, never to send another one. */
   SPONSORSHIP_CONFIRMING: 'WAIT',
+  INVALID_LINK: 'INVALID_REQUEST',
+  LINK_EXPIRED: 'INVALID_REQUEST',
+  LINK_UNAVAILABLE: 'INVALID_REQUEST',
+  ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
 }
+
+/** Payment links: an invoice paid once, a fixed price paid many times, or a subscription P2Flux collects. */
+export type PaymentLinkKind = 'once' | 'reusable' | 'subscription'
+
+export type PaymentLinkTerms = {
+  kind: PaymentLinkKind
+  recipient: string
+  /** Decimal USDC, e.g. "10.00". */
+  amount: string
+  /** Optional note for the buyer, up to 60 characters, no web or mail addresses. */
+  label?: string
+  /** Unix seconds. Default 7 days for an invoice, a year otherwise. */
+  expiresAt?: number
+  /** One-time kinds: the buyer pays the network fee in USDC (no ETH needed). Fixed for the link's life. */
+  gasPaymentMode?: GasPaymentMode
+  /** Subscriptions: seconds between charges, at least one day. */
+  period?: number
+  /** Subscriptions: number of charges; omit for until cancelled. */
+  periods?: number
+}
+
+export type PaymentLink = {
+  /** The public link token. Send `checkoutLink('link', link)` to buyers. */
+  link: string
+  /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
+  manage: string
+  kind: PaymentLinkKind
+  id: string
+  recipient: string
+  amount: string
+  amountUnits: string
+  label?: string
+  createdAt: number
+  expiresAt: number
+  raw: Record<string, unknown>
+}
+
+export type PaymentLinkPayment = { txHash: string; blockNumber: string; reference: string; amountUnits: string; payer?: string; timestamp?: number }
+
+export type PaymentLinkSubscriber = {
+  subscriptionId: string
+  payer: string
+  state: 'active' | 'stopped' | 'suspended' | 'ended'
+  startedAt: number
+  /** The last period collected, -1 before the first. */
+  lastPeriod: number
+  lastTx?: string
+  nextAttemptAt?: number
+  lastCode?: string
+}
+
+export type PaymentLinkStatus = {
+  kind: PaymentLinkKind
+  state: 'open' | 'expired'
+  /** Invoices: paid or not. */
+  paid?: boolean
+  payment?: PaymentLinkPayment
+  /** Reusable links, with the manage token: payments read from the chain so far. */
+  payments?: PaymentLinkPayment[]
+  /** Everything up to a few seconds ago has been read; ask again for more when false. */
+  complete?: boolean
+  subscribers?: PaymentLinkSubscriber[]
+  raw: Record<string, unknown>
+}
+
+const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
+  txHash: p.tx_hash as string,
+  blockNumber: p.block_number as string,
+  reference: p.reference as string,
+  amountUnits: p.amount_units as string,
+  ...(p.payer ? { payer: p.payer as string } : {}),
+  ...(p.timestamp ? { timestamp: p.timestamp as number } : {}),
+})
 
 export type P2FluxOptions = {
   apiUrl: string
@@ -687,14 +770,15 @@ export type P2FluxOptions = {
 }
 
 /** The pages of the checkout a link can open. */
-export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve'
+/** `link` opens a payment link for a buyer; `links` is the merchant's private overview of one. */
+export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve' | 'link' | 'links'
 
 const HOSTED_CHECKOUT: Record<string, string> = {
   'api.p2flux.com': 'https://pay.p2flux.com',
   'api-test.p2flux.com': 'https://pay-test.p2flux.com',
 }
 
-const CHECKOUT_PAGES = new Set<string>(['pay', 'subscribe', 'cancel', 'refund', 'approve'])
+const CHECKOUT_PAGES = new Set<string>(['pay', 'subscribe', 'cancel', 'refund', 'approve', 'link', 'links'])
 
 /**
  * The checkout's base address: the one given, else the hosted one for a known API, else null.
@@ -803,6 +887,34 @@ export function createP2Flux(options: P2FluxOptions) {
       throw new P2FluxError(status, ACTIONS[status] ?? 'RETRY_LATER', payload)
     }
     return payload
+  }
+
+  /* A charge answer, whether it came from /v1/charges or from "collect now" on a payment link. */
+  const chargeAt = async (path: string, payload: Record<string, unknown>): Promise<ChargeResult> => {
+    const body = await post(path, payload)
+      .then((res) => res.body)
+      // An unreachable API is not a payment outcome, but a merchant loop should not have to
+      // try/catch around it either: it comes back as NETWORK_ERROR / RETRY_LATER like any other
+      // retryable result. The charge may or may not have landed; retrying is safe either way.
+      .catch((err: unknown) =>
+        err instanceof P2FluxError ? ({ error: err.status } as Record<string, unknown>) : Promise.reject(err),
+      )
+    const status = ((body.status as string) ?? (body.error as string) ?? 'INTERNAL_ERROR') as ChargeStatus
+    const action = ((body.action as MerchantAction) ?? ACTIONS[status] ?? 'RETRY_LATER') as MerchantAction
+    return {
+      status,
+      ok: status === 'CHARGED' || status === 'ALREADY_CHARGED',
+      alreadyPaid: status === 'ALREADY_CHARGED',
+      action,
+      // WAIT is retryable in the only sense that matters here: ask the same question again.
+      retryable: action === 'RETRY_LATER' || action === 'WAIT',
+      txHash: body.tx_hash as string | undefined,
+      amount: body.amount as string | undefined,
+      subscriptionId: body.subscription_id as string | undefined,
+      periodIndex: body.period_index as number | undefined,
+      nextPeriodAt: body.next_period_at as string | undefined,
+      raw: body,
+    }
   }
 
   return {
@@ -1141,30 +1253,86 @@ export function createP2Flux(options: P2FluxOptions) {
      * timeout or a crash returns ALREADY_CHARGED instead of charging again.
      */
     async charge(subscriptionRef: string): Promise<ChargeResult> {
-      const body = await post('/v1/charges', { subscription: subscriptionRef })
-        .then((res) => res.body)
-        // An unreachable API is not a payment outcome, but a merchant loop should not have to
-        // try/catch around it either: it comes back as NETWORK_ERROR / RETRY_LATER like any other
-        // retryable result. The charge may or may not have landed; retrying is safe either way.
-        .catch((err: unknown) =>
-          err instanceof P2FluxError ? ({ error: err.status } as Record<string, unknown>) : Promise.reject(err),
-        )
-      const status = ((body.status as string) ?? (body.error as string) ?? 'INTERNAL_ERROR') as ChargeStatus
-      const action = ((body.action as MerchantAction) ?? ACTIONS[status] ?? 'RETRY_LATER') as MerchantAction
+      return chargeAt('/v1/charges', { subscription: subscriptionRef })
+    },
+
+    // --- payment links -----------------------------------------------------------------------
+
+    /**
+     * Create a payment link - nothing is stored. Send `checkoutLink('link', link.link)` to buyers
+     * (e-mail, chat, QR); keep `link.manage` for yourself.
+     */
+    async createPaymentLink(terms: PaymentLinkTerms): Promise<PaymentLink> {
+      const body = await postOrThrow('/v1/links', {
+        kind: terms.kind,
+        recipient: terms.recipient,
+        amount: terms.amount,
+        ...(terms.label === undefined ? {} : { label: terms.label }),
+        ...(terms.expiresAt === undefined ? {} : { expires_at: terms.expiresAt }),
+        ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+        ...(terms.period === undefined ? {} : { period: terms.period }),
+        ...(terms.periods === undefined ? {} : { periods: terms.periods }),
+      })
       return {
-        status,
-        ok: status === 'CHARGED' || status === 'ALREADY_CHARGED',
-        alreadyPaid: status === 'ALREADY_CHARGED',
-        action,
-        // WAIT is retryable in the only sense that matters here: ask the same question again.
-        retryable: action === 'RETRY_LATER' || action === 'WAIT',
-        txHash: body.tx_hash as string | undefined,
-        amount: body.amount as string | undefined,
-        subscriptionId: body.subscription_id as string | undefined,
-        periodIndex: body.period_index as number | undefined,
-        nextPeriodAt: body.next_period_at as string | undefined,
+        link: body.link as string,
+        manage: body.manage as string,
+        kind: body.kind as PaymentLinkKind,
+        id: body.id as string,
+        recipient: body.recipient as string,
+        amount: body.amount as string,
+        amountUnits: body.amount_units as string,
+        ...(body.label ? { label: body.label as string } : {}),
+        createdAt: body.created_at as number,
+        expiresAt: body.expires_at as number,
         raw: body,
       }
+    },
+
+    /**
+     * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token
+     * (subscriptions). Only needed for a checkout of your own; the P2Flux checkout calls it itself.
+     */
+    async openPaymentLink(link: string, payer?: string): Promise<Record<string, unknown>> {
+      return postOrThrow('/v1/links/open', { link, ...(payer ? { payer } : {}) })
+    },
+
+    /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
+    async paymentLinkStatus(token: { link: string } | { manage: string }): Promise<PaymentLinkStatus> {
+      const body = await postOrThrow('/v1/links/status', token)
+      return {
+        kind: body.kind as PaymentLinkKind,
+        state: body.state as 'open' | 'expired',
+        ...(body.paid === undefined ? {} : { paid: body.paid as boolean }),
+        ...(body.payment ? { payment: linkPayment(body.payment as Record<string, unknown>) } : {}),
+        ...(body.payments ? { payments: (body.payments as Record<string, unknown>[]).map(linkPayment) } : {}),
+        ...(body.complete === undefined ? {} : { complete: body.complete as boolean }),
+        ...(body.subscribers
+          ? {
+              subscribers: (body.subscribers as Record<string, unknown>[]).map((s) => ({
+                subscriptionId: s.subscription_id as string,
+                payer: s.payer as string,
+                state: s.state as PaymentLinkSubscriber['state'],
+                startedAt: s.started_at as number,
+                lastPeriod: s.last_period as number,
+                ...(s.last_tx ? { lastTx: s.last_tx as string } : {}),
+                ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at as number } : {}),
+                ...(s.last_code ? { lastCode: s.last_code as string } : {}),
+              })),
+            }
+          : {}),
+        raw: body,
+      }
+    },
+
+    /** "Collect now" for one subscriber of your subscription link. Same answers as `charge()`. */
+    async collectPaymentLink(manage: string, subscriptionId: string): Promise<ChargeResult> {
+      return chargeAt('/v1/links/collect', { manage, subscription_id: subscriptionId })
+    },
+
+    /** Stop collecting one subscriber (reversible with `collectPaymentLink`). Only the buyer can revoke on chain. */
+    async stopPaymentLink(manage: string, subscriptionId: string): Promise<{ subscriptionId: string; state: string }> {
+      const body = await postOrThrow('/v1/links/stop', { manage, subscription_id: subscriptionId })
+      return { subscriptionId: body.subscription_id as string, state: body.state as string }
     },
 
     /** Current state, read straight from the chain. Use it to reconcile after downtime. */

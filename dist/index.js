@@ -113,12 +113,24 @@ const ACTIONS = {
     /* In flight: the buyer's authorization may already be spent, so the answer is to look the
      * settlement up, never to send another one. */
     SPONSORSHIP_CONFIRMING: 'WAIT',
+    INVALID_LINK: 'INVALID_REQUEST',
+    LINK_EXPIRED: 'INVALID_REQUEST',
+    LINK_UNAVAILABLE: 'INVALID_REQUEST',
+    ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
 };
+const linkPayment = (p) => ({
+    txHash: p.tx_hash,
+    blockNumber: p.block_number,
+    reference: p.reference,
+    amountUnits: p.amount_units,
+    ...(p.payer ? { payer: p.payer } : {}),
+    ...(p.timestamp ? { timestamp: p.timestamp } : {}),
+});
 const HOSTED_CHECKOUT = {
     'api.p2flux.com': 'https://pay.p2flux.com',
     'api-test.p2flux.com': 'https://pay-test.p2flux.com',
 };
-const CHECKOUT_PAGES = new Set(['pay', 'subscribe', 'cancel', 'refund', 'approve']);
+const CHECKOUT_PAGES = new Set(['pay', 'subscribe', 'cancel', 'refund', 'approve', 'link', 'links']);
 /**
  * The checkout's base address: the one given, else the hosted one for a known API, else null.
  *
@@ -214,6 +226,31 @@ export function createP2Flux(options) {
             throw new P2FluxError(status, ACTIONS[status] ?? 'RETRY_LATER', payload);
         }
         return payload;
+    };
+    /* A charge answer, whether it came from /v1/charges or from "collect now" on a payment link. */
+    const chargeAt = async (path, payload) => {
+        const body = await post(path, payload)
+            .then((res) => res.body)
+            // An unreachable API is not a payment outcome, but a merchant loop should not have to
+            // try/catch around it either: it comes back as NETWORK_ERROR / RETRY_LATER like any other
+            // retryable result. The charge may or may not have landed; retrying is safe either way.
+            .catch((err) => err instanceof P2FluxError ? { error: err.status } : Promise.reject(err));
+        const status = (body.status ?? body.error ?? 'INTERNAL_ERROR');
+        const action = (body.action ?? ACTIONS[status] ?? 'RETRY_LATER');
+        return {
+            status,
+            ok: status === 'CHARGED' || status === 'ALREADY_CHARGED',
+            alreadyPaid: status === 'ALREADY_CHARGED',
+            action,
+            // WAIT is retryable in the only sense that matters here: ask the same question again.
+            retryable: action === 'RETRY_LATER' || action === 'WAIT',
+            txHash: body.tx_hash,
+            amount: body.amount,
+            subscriptionId: body.subscription_id,
+            periodIndex: body.period_index,
+            nextPeriodAt: body.next_period_at,
+            raw: body,
+        };
     };
     return {
         /**
@@ -520,28 +557,80 @@ export function createP2Flux(options) {
          * timeout or a crash returns ALREADY_CHARGED instead of charging again.
          */
         async charge(subscriptionRef) {
-            const body = await post('/v1/charges', { subscription: subscriptionRef })
-                .then((res) => res.body)
-                // An unreachable API is not a payment outcome, but a merchant loop should not have to
-                // try/catch around it either: it comes back as NETWORK_ERROR / RETRY_LATER like any other
-                // retryable result. The charge may or may not have landed; retrying is safe either way.
-                .catch((err) => err instanceof P2FluxError ? { error: err.status } : Promise.reject(err));
-            const status = (body.status ?? body.error ?? 'INTERNAL_ERROR');
-            const action = (body.action ?? ACTIONS[status] ?? 'RETRY_LATER');
+            return chargeAt('/v1/charges', { subscription: subscriptionRef });
+        },
+        // --- payment links -----------------------------------------------------------------------
+        /**
+         * Create a payment link - nothing is stored. Send `checkoutLink('link', link.link)` to buyers
+         * (e-mail, chat, QR); keep `link.manage` for yourself.
+         */
+        async createPaymentLink(terms) {
+            const body = await postOrThrow('/v1/links', {
+                kind: terms.kind,
+                recipient: terms.recipient,
+                amount: terms.amount,
+                ...(terms.label === undefined ? {} : { label: terms.label }),
+                ...(terms.expiresAt === undefined ? {} : { expires_at: terms.expiresAt }),
+                ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+                ...(terms.period === undefined ? {} : { period: terms.period }),
+                ...(terms.periods === undefined ? {} : { periods: terms.periods }),
+            });
             return {
-                status,
-                ok: status === 'CHARGED' || status === 'ALREADY_CHARGED',
-                alreadyPaid: status === 'ALREADY_CHARGED',
-                action,
-                // WAIT is retryable in the only sense that matters here: ask the same question again.
-                retryable: action === 'RETRY_LATER' || action === 'WAIT',
-                txHash: body.tx_hash,
+                link: body.link,
+                manage: body.manage,
+                kind: body.kind,
+                id: body.id,
+                recipient: body.recipient,
                 amount: body.amount,
-                subscriptionId: body.subscription_id,
-                periodIndex: body.period_index,
-                nextPeriodAt: body.next_period_at,
+                amountUnits: body.amount_units,
+                ...(body.label ? { label: body.label } : {}),
+                createdAt: body.created_at,
+                expiresAt: body.expires_at,
                 raw: body,
             };
+        },
+        /**
+         * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token
+         * (subscriptions). Only needed for a checkout of your own; the P2Flux checkout calls it itself.
+         */
+        async openPaymentLink(link, payer) {
+            return postOrThrow('/v1/links/open', { link, ...(payer ? { payer } : {}) });
+        },
+        /** What a link has collected. With `{ manage }`: who paid, every payment, every subscriber. */
+        async paymentLinkStatus(token) {
+            const body = await postOrThrow('/v1/links/status', token);
+            return {
+                kind: body.kind,
+                state: body.state,
+                ...(body.paid === undefined ? {} : { paid: body.paid }),
+                ...(body.payment ? { payment: linkPayment(body.payment) } : {}),
+                ...(body.payments ? { payments: body.payments.map(linkPayment) } : {}),
+                ...(body.complete === undefined ? {} : { complete: body.complete }),
+                ...(body.subscribers
+                    ? {
+                        subscribers: body.subscribers.map((s) => ({
+                            subscriptionId: s.subscription_id,
+                            payer: s.payer,
+                            state: s.state,
+                            startedAt: s.started_at,
+                            lastPeriod: s.last_period,
+                            ...(s.last_tx ? { lastTx: s.last_tx } : {}),
+                            ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at } : {}),
+                            ...(s.last_code ? { lastCode: s.last_code } : {}),
+                        })),
+                    }
+                    : {}),
+                raw: body,
+            };
+        },
+        /** "Collect now" for one subscriber of your subscription link. Same answers as `charge()`. */
+        async collectPaymentLink(manage, subscriptionId) {
+            return chargeAt('/v1/links/collect', { manage, subscription_id: subscriptionId });
+        },
+        /** Stop collecting one subscriber (reversible with `collectPaymentLink`). Only the buyer can revoke on chain. */
+        async stopPaymentLink(manage, subscriptionId) {
+            const body = await postOrThrow('/v1/links/stop', { manage, subscription_id: subscriptionId });
+            return { subscriptionId: body.subscription_id, state: body.state };
         },
         /** Current state, read straight from the chain. Use it to reconcile after downtime. */
         async status(subscriptionRef) {

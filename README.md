@@ -142,6 +142,24 @@ whether the charge landed. See [Subscriptions](docs/subscriptions.md).
 The `p2s2` capability it charges is a bearer credential: server-side only, encrypted at rest, never
 in a browser bundle. → [Server and browser](docs/server-and-browser.md)
 
+## Payment links
+
+No server needed: create a link once and send it by e-mail, chat or QR code.
+
+```ts
+const link = await p2flux.createPaymentLink({
+  kind: 'once', // 'reusable' for a fixed price, 'subscription' with period for a plan
+  recipient: process.env.P2FLUX_RECIPIENT!,
+  amount: '120.00',
+  label: 'Invoice 2026-041',
+})
+const forBuyer = p2flux.checkoutLink('link', link.link)
+const forYou = p2flux.checkoutLink('links', link.manage) // private: who paid, every payment
+```
+
+An invoice link can be paid once - the contract itself refuses a second payment. Subscription links
+are collected by P2Flux every period. See [Payment links](docs/payment-links.md).
+
 ## Charge AI agents (x402 paywall)
 
 AI agents pay for an API route or a page in USDC, per request, with the open x402 standard. You add
@@ -217,7 +235,8 @@ Every option, the result shape and the test-to-live checklist: [Charge AI agents
 | [Errors and retries](docs/errors.md) | Every public code, with a recipe per situation |
 | [Testing](docs/testing.md) | A fake `fetch`, canned answers, no crypto spent |
 | [Production checklist](docs/production-checklist.md) | Before real money |
-| [Call and result contract](docs/protocol-contract.md) | All 21 operations in one table |
+| [Payment links](docs/payment-links.md) | Invoices, fixed prices and subscriptions sent as a URL |
+| [Call and result contract](docs/protocol-contract.md) | All 26 operations in one table |
 | [Examples](examples/) | Runnable, one operation per file |
 
 Full protocol docs: [p2flux.com/docs](https://p2flux.com/docs/) ·
