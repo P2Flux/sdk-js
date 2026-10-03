@@ -290,13 +290,27 @@ test('checkoutLink: a self-hosted checkout, on a domain or a sub-path', () => {
   assert.equal(own.checkoutLink('pay', 'a/b#c'), 'https://pay.example.com/#/pay/a%2Fb%23c')
 })
 
-test('checkoutLink: refuses what would be a wrong or unsafe link', () => {
-  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'http://pay.example.com' }), TypeError)
-  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'https://pay.example.com/?x=1' }), TypeError)
-  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'not a url' }), TypeError)
+test('checkoutLink: refuses what would be a wrong or unsafe link - at the link, never at construction', () => {
+  const bad = (checkoutUrl: string) => {
+    // The client still works for everything else: a typo in an optional setting never stops payments.
+    const p = createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl })
+    assert.equal(typeof p.createPayment, 'function')
+    assert.throws(() => p.checkoutLink('pay', 't'), TypeError, checkoutUrl)
+  }
+  bad('http://pay.example.com')
+  bad('https://pay.example.com/?x=1')
+  bad('https://user:pw@pay.example.com')
+  bad('not a url')
+  bad('ftp://localhost')
+  bad('javascript:alert(1)')
+  bad('http://localhost.evil.com')
   assert.equal(createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'http://localhost:5173' }).checkoutLink('pay', 't'), 'http://localhost:5173/#/pay/t')
+  // An empty setting (an unset env var) means "not set": the hosted checkout of the API.
+  assert.equal(createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: '' }).checkoutLink('pay', 't'), 'https://pay.p2flux.com/#/pay/t')
+  assert.equal(createP2Flux({ apiUrl: 'https://API.P2FLUX.COM' }).checkoutLink('pay', 't'), 'https://pay.p2flux.com/#/pay/t')
   const own = createP2Flux({ apiUrl: 'http://localhost:3000' })
   assert.throws(() => own.checkoutLink('pay', 't'), /checkoutUrl is required/)
+  assert.throws(() => createP2Flux({ apiUrl: 'https://constructor' }).checkoutLink('pay', 't'), /checkoutUrl is required/)
   const live = createP2Flux({ apiUrl: 'https://api.p2flux.com' })
   assert.throws(() => live.checkoutLink('pay', ''), TypeError)
   assert.throws(() => live.checkoutLink('admin' as 'pay', 't'), TypeError)

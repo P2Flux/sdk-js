@@ -696,27 +696,36 @@ const HOSTED_CHECKOUT: Record<string, string> = {
 
 const CHECKOUT_PAGES = new Set<string>(['pay', 'subscribe', 'cancel', 'refund', 'approve'])
 
-/** The checkout's base address: the one given, else the hosted one for a known API, else none. */
+/**
+ * The checkout's base address: the one given, else the hosted one for a known API, else null.
+ *
+ * Only ever called from checkoutLink(), never at construction: an optional setting with a typo must
+ * not stop a merchant's client from creating, verifying or charging payments. It fails the one call
+ * that needs it, with the reason.
+ */
 const checkoutBase = (apiUrl: string, checkoutUrl: string | undefined): string | null => {
-  if (checkoutUrl === undefined) {
+  if (checkoutUrl === undefined || checkoutUrl.trim() === '') {
     let host = ''
     try {
-      host = new URL(apiUrl).host
+      host = new URL(apiUrl).host.toLowerCase()
     } catch {
       /* not a URL: no hosted default */
     }
-    return HOSTED_CHECKOUT[host] ?? null
+    return Object.hasOwn(HOSTED_CHECKOUT, host) ? HOSTED_CHECKOUT[host]! : null
   }
   let url: URL
   try {
-    url = new URL(checkoutUrl)
+    url = new URL(checkoutUrl.trim())
   } catch {
     throw new TypeError(`checkoutUrl is not a URL: ${checkoutUrl}`)
   }
-  if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (!(url.protocol === 'https:' || (url.protocol === 'http:' && local))) {
     throw new TypeError('checkoutUrl must be https (http only for localhost)')
   }
-  if (url.search || url.hash) throw new TypeError('checkoutUrl must not carry a query or a fragment')
+  if (url.username || url.password || url.search || url.hash) {
+    throw new TypeError('checkoutUrl must not carry credentials, a query or a fragment')
+  }
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '')
 }
 
@@ -762,7 +771,6 @@ const networkFeeQuote = (raw: Record<string, unknown>): NetworkFeeQuote => ({
 
 export function createP2Flux(options: P2FluxOptions) {
   const base = options.apiUrl.replace(/\/$/, '')
-  const checkout = checkoutBase(base, options.checkoutUrl)
   const timeoutMs = options.timeoutMs ?? 60_000
   const fetchImpl = options.fetch ?? globalThis.fetch
 
@@ -809,6 +817,7 @@ export function createP2Flux(options: P2FluxOptions) {
     checkoutLink(page: CheckoutPage, token: string): string {
       if (!CHECKOUT_PAGES.has(page)) throw new TypeError(`unknown checkout page: ${page}`)
       if (!token) throw new TypeError('checkoutLink needs a token')
+      const checkout = checkoutBase(base, options.checkoutUrl)
       if (!checkout) throw new TypeError('checkoutUrl is required for this apiUrl')
       return `${checkout}/#/${page}/${encodeURIComponent(token)}`
     },

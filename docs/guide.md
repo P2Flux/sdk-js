@@ -1,6 +1,6 @@
 # P2Flux JavaScript SDK — documentation
 
-`@p2flux/sdk` v0.8.0. A thin, zero-dependency client over the P2Flux HTTP API: it normalizes result
+`@p2flux/sdk` v0.9.0. A thin, zero-dependency client over the P2Flux HTTP API: it normalizes result
 codes and nothing else. No scheduler, no storage, no retry loops — your application owns all three.
 
 This page is the index. The guide was split into one page per topic in the release before this one.
