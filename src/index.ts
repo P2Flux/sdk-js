@@ -695,6 +695,8 @@ export type PaymentLinkTerms = {
   period?: number
   /** Subscriptions: number of charges; omit for until cancelled. */
   periods?: number
+  /** Subscriptions: days without a payment after which a subscriber is paused (1..90, default 7). */
+  suspendAfterDays?: number
 }
 
 /** A link's terms, as the API states them. */
@@ -713,6 +715,7 @@ export type PaymentLinkTermsView = {
   /** Subscriptions. */
   period?: number
   periods?: number
+  suspendAfterDays?: number
 }
 
 export type PaymentLink = PaymentLinkTermsView & {
@@ -771,6 +774,7 @@ const linkTerms = (b: Record<string, unknown>): PaymentLinkTermsView => ({
   ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode as GasPaymentMode } : {}),
   ...(b.period ? { period: b.period as number } : {}),
   ...(b.periods ? { periods: b.periods as number } : {}),
+  ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days as number } : {}),
 })
 
 const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
@@ -1304,6 +1308,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
         ...(terms.period === undefined ? {} : { period: terms.period }),
         ...(terms.periods === undefined ? {} : { periods: terms.periods }),
+        ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
       })
       return { ...linkTerms(body), link: body.link as string, manage: body.manage as string, raw: body }
     },

@@ -466,6 +466,8 @@ export type PaymentLinkTerms = {
     period?: number;
     /** Subscriptions: number of charges; omit for until cancelled. */
     periods?: number;
+    /** Subscriptions: days without a payment after which a subscriber is paused (1..90, default 7). */
+    suspendAfterDays?: number;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -483,6 +485,7 @@ export type PaymentLinkTermsView = {
     /** Subscriptions. */
     period?: number;
     periods?: number;
+    suspendAfterDays?: number;
 };
 export type PaymentLink = PaymentLinkTermsView & {
     /** The public link token. Send `checkoutLink('link', link)` to buyers. */

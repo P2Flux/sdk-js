@@ -131,6 +131,7 @@ const linkTerms = (b) => ({
     ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode } : {}),
     ...(b.period ? { period: b.period } : {}),
     ...(b.periods ? { periods: b.periods } : {}),
+    ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days } : {}),
 });
 const linkPayment = (p) => ({
     txHash: p.tx_hash,
@@ -588,6 +589,7 @@ export function createP2Flux(options) {
                 ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
                 ...(terms.period === undefined ? {} : { period: terms.period }),
                 ...(terms.periods === undefined ? {} : { periods: terms.periods }),
+                ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
             });
             return { ...linkTerms(body), link: body.link, manage: body.manage, raw: body };
         },
