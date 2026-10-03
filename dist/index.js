@@ -118,6 +118,20 @@ const ACTIONS = {
     LINK_UNAVAILABLE: 'INVALID_REQUEST',
     ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
 };
+const linkTerms = (b) => ({
+    kind: b.kind,
+    id: b.id,
+    chainId: b.chain_id,
+    recipient: b.recipient,
+    amount: b.amount,
+    amountUnits: b.amount_units,
+    ...(b.label ? { label: b.label } : {}),
+    createdAt: b.created_at,
+    expiresAt: b.expires_at,
+    ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode } : {}),
+    ...(b.period ? { period: b.period } : {}),
+    ...(b.periods ? { periods: b.periods } : {}),
+});
 const linkPayment = (p) => ({
     txHash: p.tx_hash,
     blockNumber: p.block_number,
@@ -575,19 +589,7 @@ export function createP2Flux(options) {
                 ...(terms.period === undefined ? {} : { period: terms.period }),
                 ...(terms.periods === undefined ? {} : { periods: terms.periods }),
             });
-            return {
-                link: body.link,
-                manage: body.manage,
-                kind: body.kind,
-                id: body.id,
-                recipient: body.recipient,
-                amount: body.amount,
-                amountUnits: body.amount_units,
-                ...(body.label ? { label: body.label } : {}),
-                createdAt: body.created_at,
-                expiresAt: body.expires_at,
-                raw: body,
-            };
+            return { ...linkTerms(body), link: body.link, manage: body.manage, raw: body };
         },
         /**
          * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token
@@ -600,8 +602,12 @@ export function createP2Flux(options) {
         async paymentLinkStatus(token) {
             const body = await postOrThrow('/v1/links/status', token);
             return {
-                kind: body.kind,
+                ...linkTerms(body),
                 state: body.state,
+                ...(body.link ? { link: body.link } : {}),
+                ...(body.code ? { code: body.code } : {}),
+                ...(body.final === undefined ? {} : { final: body.final }),
+                ...(body.truncated === undefined ? {} : { truncated: body.truncated }),
                 ...(body.paid === undefined ? {} : { paid: body.paid }),
                 ...(body.payment ? { payment: linkPayment(body.payment) } : {}),
                 ...(body.payments ? { payments: body.payments.map(linkPayment) } : {}),
@@ -614,6 +620,7 @@ export function createP2Flux(options) {
                             state: s.state,
                             startedAt: s.started_at,
                             lastPeriod: s.last_period,
+                            ...(s.paid_periods === undefined ? {} : { paidPeriods: s.paid_periods }),
                             ...(s.last_tx ? { lastTx: s.last_tx } : {}),
                             ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at } : {}),
                             ...(s.last_code ? { lastCode: s.last_code } : {}),

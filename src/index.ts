@@ -697,19 +697,29 @@ export type PaymentLinkTerms = {
   periods?: number
 }
 
-export type PaymentLink = {
-  /** The public link token. Send `checkoutLink('link', link)` to buyers. */
-  link: string
-  /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
-  manage: string
+/** A link's terms, as the API states them. */
+export type PaymentLinkTermsView = {
   kind: PaymentLinkKind
   id: string
+  chainId: number
   recipient: string
   amount: string
   amountUnits: string
   label?: string
   createdAt: number
   expiresAt: number
+  /** One-time kinds. */
+  gasPaymentMode?: GasPaymentMode
+  /** Subscriptions. */
+  period?: number
+  periods?: number
+}
+
+export type PaymentLink = PaymentLinkTermsView & {
+  /** The public link token. Send `checkoutLink('link', link)` to buyers. */
+  link: string
+  /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
+  manage: string
   raw: Record<string, unknown>
 }
 
@@ -722,14 +732,23 @@ export type PaymentLinkSubscriber = {
   startedAt: number
   /** The last period collected, -1 before the first. */
   lastPeriod: number
+  /** How many periods have been collected. */
+  paidPeriods?: number
   lastTx?: string
   nextAttemptAt?: number
   lastCode?: string
 }
 
-export type PaymentLinkStatus = {
-  kind: PaymentLinkKind
+export type PaymentLinkStatus = PaymentLinkTermsView & {
   state: 'open' | 'expired'
+  /** Manage view only: the public link, to share again. */
+  link?: string
+  /** Invoices: why a payment found on chain is not counted yet (e.g. PAYMENT_CONFIRMING). */
+  code?: string
+  /** Reusable links: no later payment is possible. */
+  final?: boolean
+  /** Reusable links: more than 5,000 payments; the list stops there. */
+  truncated?: boolean
   /** Invoices: paid or not. */
   paid?: boolean
   payment?: PaymentLinkPayment
@@ -740,6 +759,21 @@ export type PaymentLinkStatus = {
   subscribers?: PaymentLinkSubscriber[]
   raw: Record<string, unknown>
 }
+
+const linkTerms = (b: Record<string, unknown>): PaymentLinkTermsView => ({
+  kind: b.kind as PaymentLinkKind,
+  id: b.id as string,
+  chainId: b.chain_id as number,
+  recipient: b.recipient as string,
+  amount: b.amount as string,
+  amountUnits: b.amount_units as string,
+  ...(b.label ? { label: b.label as string } : {}),
+  createdAt: b.created_at as number,
+  expiresAt: b.expires_at as number,
+  ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode as GasPaymentMode } : {}),
+  ...(b.period ? { period: b.period as number } : {}),
+  ...(b.periods ? { periods: b.periods as number } : {}),
+})
 
 const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
   txHash: p.tx_hash as string,
@@ -1273,19 +1307,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.period === undefined ? {} : { period: terms.period }),
         ...(terms.periods === undefined ? {} : { periods: terms.periods }),
       })
-      return {
-        link: body.link as string,
-        manage: body.manage as string,
-        kind: body.kind as PaymentLinkKind,
-        id: body.id as string,
-        recipient: body.recipient as string,
-        amount: body.amount as string,
-        amountUnits: body.amount_units as string,
-        ...(body.label ? { label: body.label as string } : {}),
-        createdAt: body.created_at as number,
-        expiresAt: body.expires_at as number,
-        raw: body,
-      }
+      return { ...linkTerms(body), link: body.link as string, manage: body.manage as string, raw: body }
     },
 
     /**
@@ -1300,8 +1322,12 @@ export function createP2Flux(options: P2FluxOptions) {
     async paymentLinkStatus(token: { link: string } | { manage: string }): Promise<PaymentLinkStatus> {
       const body = await postOrThrow('/v1/links/status', token)
       return {
-        kind: body.kind as PaymentLinkKind,
+        ...linkTerms(body),
         state: body.state as 'open' | 'expired',
+        ...(body.link ? { link: body.link as string } : {}),
+        ...(body.code ? { code: body.code as string } : {}),
+        ...(body.final === undefined ? {} : { final: body.final as boolean }),
+        ...(body.truncated === undefined ? {} : { truncated: body.truncated as boolean }),
         ...(body.paid === undefined ? {} : { paid: body.paid as boolean }),
         ...(body.payment ? { payment: linkPayment(body.payment as Record<string, unknown>) } : {}),
         ...(body.payments ? { payments: (body.payments as Record<string, unknown>[]).map(linkPayment) } : {}),
@@ -1314,6 +1340,7 @@ export function createP2Flux(options: P2FluxOptions) {
                 state: s.state as PaymentLinkSubscriber['state'],
                 startedAt: s.started_at as number,
                 lastPeriod: s.last_period as number,
+                ...(s.paid_periods === undefined ? {} : { paidPeriods: s.paid_periods as number }),
                 ...(s.last_tx ? { lastTx: s.last_tx as string } : {}),
                 ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at as number } : {}),
                 ...(s.last_code ? { lastCode: s.last_code as string } : {}),

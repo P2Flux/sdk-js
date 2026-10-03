@@ -467,19 +467,28 @@ export type PaymentLinkTerms = {
     /** Subscriptions: number of charges; omit for until cancelled. */
     periods?: number;
 };
-export type PaymentLink = {
-    /** The public link token. Send `checkoutLink('link', link)` to buyers. */
-    link: string;
-    /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
-    manage: string;
+/** A link's terms, as the API states them. */
+export type PaymentLinkTermsView = {
     kind: PaymentLinkKind;
     id: string;
+    chainId: number;
     recipient: string;
     amount: string;
     amountUnits: string;
     label?: string;
     createdAt: number;
     expiresAt: number;
+    /** One-time kinds. */
+    gasPaymentMode?: GasPaymentMode;
+    /** Subscriptions. */
+    period?: number;
+    periods?: number;
+};
+export type PaymentLink = PaymentLinkTermsView & {
+    /** The public link token. Send `checkoutLink('link', link)` to buyers. */
+    link: string;
+    /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
+    manage: string;
     raw: Record<string, unknown>;
 };
 export type PaymentLinkPayment = {
@@ -497,13 +506,22 @@ export type PaymentLinkSubscriber = {
     startedAt: number;
     /** The last period collected, -1 before the first. */
     lastPeriod: number;
+    /** How many periods have been collected. */
+    paidPeriods?: number;
     lastTx?: string;
     nextAttemptAt?: number;
     lastCode?: string;
 };
-export type PaymentLinkStatus = {
-    kind: PaymentLinkKind;
+export type PaymentLinkStatus = PaymentLinkTermsView & {
     state: 'open' | 'expired';
+    /** Manage view only: the public link, to share again. */
+    link?: string;
+    /** Invoices: why a payment found on chain is not counted yet (e.g. PAYMENT_CONFIRMING). */
+    code?: string;
+    /** Reusable links: no later payment is possible. */
+    final?: boolean;
+    /** Reusable links: more than 5,000 payments; the list stops there. */
+    truncated?: boolean;
     /** Invoices: paid or not. */
     paid?: boolean;
     payment?: PaymentLinkPayment;
