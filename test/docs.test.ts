@@ -34,7 +34,7 @@ const pages = (): string[] => {
 const client = createP2Flux({ apiUrl: 'https://api.example' })
 const methods = new Set(Object.keys(client))
 const exported = new Set(Object.keys(sdk))
-const options: Record<keyof P2FluxOptions, true> = { apiUrl: true, timeoutMs: true, fetch: true }
+const options: Record<keyof P2FluxOptions, true> = { apiUrl: true, timeoutMs: true, fetch: true, checkoutUrl: true }
 const optionNames = new Set(Object.keys(options))
 
 const documents = pages().map((path) => ({

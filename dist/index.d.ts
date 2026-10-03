@@ -459,7 +459,16 @@ export type P2FluxOptions = {
     timeoutMs?: number;
     /** Injectable for tests; defaults to global fetch. */
     fetch?: typeof fetch;
+    /**
+     * Where buyers open the checkout, for `checkoutLink()`. Defaults to P2Flux's hosted checkout for
+     * the API you use (`api.p2flux.com` -> `https://pay.p2flux.com`, `api-test.p2flux.com` ->
+     * `https://pay-test.p2flux.com`). Set it to your own address when you host the checkout yourself,
+     * for example `https://pay.yourcompany.com` or `https://yourcompany.com/pay`.
+     */
+    checkoutUrl?: string;
 };
+/** The pages of the checkout a link can open. */
+export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve';
 /**
  * The two messages a customer with no native currency signs to set their allowance, and the price
  * of the transaction that carries them. Both are complete EIP-712 payloads - pass them to the
@@ -471,6 +480,15 @@ export type SubscriptionSponsorship = {
     networkFeeAuthorization: Record<string, unknown>;
 };
 export declare function createP2Flux(options: P2FluxOptions): {
+    /**
+     * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
+     * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
+     * the fragment, which browsers never send to a server or put in a Referer header.
+     *
+     * Uses `checkoutUrl`, or P2Flux's hosted checkout for the API you use; throws when neither is
+     * known (an API address of your own needs an explicit `checkoutUrl`).
+     */
+    checkoutLink(page: CheckoutPage, token: string): string;
     /**
      * Create a signed one-time payment intent.
      *

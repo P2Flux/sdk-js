@@ -271,3 +271,33 @@ test('an allowance-restore session carries no capability', async () => {
   assert.equal(session.approveToken, 'p2approve1.k1.body.mac')
   assert.doesNotMatch(JSON.stringify(session), /p2s2\./)
 })
+
+// --- checkout links -------------------------------------------------------------
+
+test('checkoutLink: P2Flux hosted checkout by default, for the API in use', () => {
+  const live = createP2Flux({ apiUrl: 'https://api.p2flux.com' })
+  assert.equal(live.checkoutLink('pay', 'p2f1.a.b.c'), 'https://pay.p2flux.com/#/pay/p2f1.a.b.c')
+  const test_ = createP2Flux({ apiUrl: 'https://api-test.p2flux.com/' })
+  assert.equal(test_.checkoutLink('subscribe', 'tok'), 'https://pay-test.p2flux.com/#/subscribe/tok')
+})
+
+test('checkoutLink: a self-hosted checkout, on a domain or a sub-path', () => {
+  const own = createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'https://pay.example.com/' })
+  assert.equal(own.checkoutLink('refund', 'r'), 'https://pay.example.com/#/refund/r')
+  const sub = createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'https://example.com/pay//' })
+  assert.equal(sub.checkoutLink('approve', 'a'), 'https://example.com/pay/#/approve/a')
+  // The token is encoded: it can never break out of the fragment.
+  assert.equal(own.checkoutLink('pay', 'a/b#c'), 'https://pay.example.com/#/pay/a%2Fb%23c')
+})
+
+test('checkoutLink: refuses what would be a wrong or unsafe link', () => {
+  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'http://pay.example.com' }), TypeError)
+  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'https://pay.example.com/?x=1' }), TypeError)
+  assert.throws(() => createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'not a url' }), TypeError)
+  assert.equal(createP2Flux({ apiUrl: 'https://api.p2flux.com', checkoutUrl: 'http://localhost:5173' }).checkoutLink('pay', 't'), 'http://localhost:5173/#/pay/t')
+  const own = createP2Flux({ apiUrl: 'http://localhost:3000' })
+  assert.throws(() => own.checkoutLink('pay', 't'), /checkoutUrl is required/)
+  const live = createP2Flux({ apiUrl: 'https://api.p2flux.com' })
+  assert.throws(() => live.checkoutLink('pay', ''), TypeError)
+  assert.throws(() => live.checkoutLink('admin' as 'pay', 't'), TypeError)
+})

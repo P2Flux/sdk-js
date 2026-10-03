@@ -677,6 +677,47 @@ export type P2FluxOptions = {
   timeoutMs?: number
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch
+  /**
+   * Where buyers open the checkout, for `checkoutLink()`. Defaults to P2Flux's hosted checkout for
+   * the API you use (`api.p2flux.com` -> `https://pay.p2flux.com`, `api-test.p2flux.com` ->
+   * `https://pay-test.p2flux.com`). Set it to your own address when you host the checkout yourself,
+   * for example `https://pay.yourcompany.com` or `https://yourcompany.com/pay`.
+   */
+  checkoutUrl?: string
+}
+
+/** The pages of the checkout a link can open. */
+export type CheckoutPage = 'pay' | 'subscribe' | 'cancel' | 'refund' | 'approve'
+
+const HOSTED_CHECKOUT: Record<string, string> = {
+  'api.p2flux.com': 'https://pay.p2flux.com',
+  'api-test.p2flux.com': 'https://pay-test.p2flux.com',
+}
+
+const CHECKOUT_PAGES = new Set<string>(['pay', 'subscribe', 'cancel', 'refund', 'approve'])
+
+/** The checkout's base address: the one given, else the hosted one for a known API, else none. */
+const checkoutBase = (apiUrl: string, checkoutUrl: string | undefined): string | null => {
+  if (checkoutUrl === undefined) {
+    let host = ''
+    try {
+      host = new URL(apiUrl).host
+    } catch {
+      /* not a URL: no hosted default */
+    }
+    return HOSTED_CHECKOUT[host] ?? null
+  }
+  let url: URL
+  try {
+    url = new URL(checkoutUrl)
+  } catch {
+    throw new TypeError(`checkoutUrl is not a URL: ${checkoutUrl}`)
+  }
+  if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+    throw new TypeError('checkoutUrl must be https (http only for localhost)')
+  }
+  if (url.search || url.hash) throw new TypeError('checkoutUrl must not carry a query or a fragment')
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, '')
 }
 
 /**
@@ -721,6 +762,7 @@ const networkFeeQuote = (raw: Record<string, unknown>): NetworkFeeQuote => ({
 
 export function createP2Flux(options: P2FluxOptions) {
   const base = options.apiUrl.replace(/\/$/, '')
+  const checkout = checkoutBase(base, options.checkoutUrl)
   const timeoutMs = options.timeoutMs ?? 60_000
   const fetchImpl = options.fetch ?? globalThis.fetch
 
@@ -756,6 +798,21 @@ export function createP2Flux(options: P2FluxOptions) {
   }
 
   return {
+    /**
+     * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
+     * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
+     * the fragment, which browsers never send to a server or put in a Referer header.
+     *
+     * Uses `checkoutUrl`, or P2Flux's hosted checkout for the API you use; throws when neither is
+     * known (an API address of your own needs an explicit `checkoutUrl`).
+     */
+    checkoutLink(page: CheckoutPage, token: string): string {
+      if (!CHECKOUT_PAGES.has(page)) throw new TypeError(`unknown checkout page: ${page}`)
+      if (!token) throw new TypeError('checkoutLink needs a token')
+      if (!checkout) throw new TypeError('checkoutUrl is required for this apiUrl')
+      return `${checkout}/#/${page}/${encodeURIComponent(token)}`
+    },
+
     /**
      * Create a signed one-time payment intent.
      *

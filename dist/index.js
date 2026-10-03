@@ -114,6 +114,37 @@ const ACTIONS = {
      * settlement up, never to send another one. */
     SPONSORSHIP_CONFIRMING: 'WAIT',
 };
+const HOSTED_CHECKOUT = {
+    'api.p2flux.com': 'https://pay.p2flux.com',
+    'api-test.p2flux.com': 'https://pay-test.p2flux.com',
+};
+const CHECKOUT_PAGES = new Set(['pay', 'subscribe', 'cancel', 'refund', 'approve']);
+/** The checkout's base address: the one given, else the hosted one for a known API, else none. */
+const checkoutBase = (apiUrl, checkoutUrl) => {
+    if (checkoutUrl === undefined) {
+        let host = '';
+        try {
+            host = new URL(apiUrl).host;
+        }
+        catch {
+            /* not a URL: no hosted default */
+        }
+        return HOSTED_CHECKOUT[host] ?? null;
+    }
+    let url;
+    try {
+        url = new URL(checkoutUrl);
+    }
+    catch {
+        throw new TypeError(`checkoutUrl is not a URL: ${checkoutUrl}`);
+    }
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+        throw new TypeError('checkoutUrl must be https (http only for localhost)');
+    }
+    if (url.search || url.hash)
+        throw new TypeError('checkoutUrl must not carry a query or a fragment');
+    return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+};
 /**
  * The accounting block, in the SDK's camelCase.
  *
@@ -143,6 +174,7 @@ const networkFeeQuote = (raw) => ({
 });
 export function createP2Flux(options) {
     const base = options.apiUrl.replace(/\/$/, '');
+    const checkout = checkoutBase(base, options.checkoutUrl);
     const timeoutMs = options.timeoutMs ?? 60_000;
     const fetchImpl = options.fetch ?? globalThis.fetch;
     const post = async (path, body) => {
@@ -177,6 +209,23 @@ export function createP2Flux(options) {
         return payload;
     };
     return {
+        /**
+         * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
+         * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
+         * the fragment, which browsers never send to a server or put in a Referer header.
+         *
+         * Uses `checkoutUrl`, or P2Flux's hosted checkout for the API you use; throws when neither is
+         * known (an API address of your own needs an explicit `checkoutUrl`).
+         */
+        checkoutLink(page, token) {
+            if (!CHECKOUT_PAGES.has(page))
+                throw new TypeError(`unknown checkout page: ${page}`);
+            if (!token)
+                throw new TypeError('checkoutLink needs a token');
+            if (!checkout)
+                throw new TypeError('checkoutUrl is required for this apiUrl');
+            return `${checkout}/#/${page}/${encodeURIComponent(token)}`;
+        },
         /**
          * Create a signed one-time payment intent.
          *
