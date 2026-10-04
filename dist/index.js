@@ -632,6 +632,7 @@ export function createP2Flux(options) {
                             state: s.state,
                             startedAt: s.started_at,
                             lastPeriod: s.last_period,
+                            ...(typeof s.paid_count === 'number' ? { paidCount: s.paid_count } : {}),
                             ...(s.last_tx ? { lastTx: s.last_tx } : {}),
                             ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at } : {}),
                             ...(s.last_code ? { lastCode: s.last_code } : {}),

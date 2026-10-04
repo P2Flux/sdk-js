@@ -509,6 +509,8 @@ export type PaymentLinkSubscriber = {
     startedAt: number;
     /** The last period collected (counting from 0). */
     lastPeriod: number;
+    /** Periods collected so far (0.10+ API; absent from older ones). */
+    paidCount?: number;
     lastTx?: string;
     nextAttemptAt?: number;
     lastCode?: string;

@@ -735,6 +735,8 @@ export type PaymentLinkSubscriber = {
   startedAt: number
   /** The last period collected (counting from 0). */
   lastPeriod: number
+  /** Periods collected so far (0.10+ API; absent from older ones). */
+  paidCount?: number
   lastTx?: string
   nextAttemptAt?: number
   lastCode?: string
@@ -1354,6 +1356,7 @@ export function createP2Flux(options: P2FluxOptions) {
                 state: s.state as PaymentLinkSubscriber['state'],
                 startedAt: s.started_at as number,
                 lastPeriod: s.last_period as number,
+                ...(typeof s.paid_count === 'number' ? { paidCount: s.paid_count } : {}),
                 ...(s.last_tx ? { lastTx: s.last_tx as string } : {}),
                 ...(s.next_attempt_at ? { nextAttemptAt: s.next_attempt_at as number } : {}),
                 ...(s.last_code ? { lastCode: s.last_code as string } : {}),
