@@ -1,6 +1,6 @@
 {
   "name": "@p2flux/sdk",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "JavaScript/TypeScript client for the P2Flux payments API.",
   "license": "MIT",
   "homepage": "https://p2flux.com/docs/",

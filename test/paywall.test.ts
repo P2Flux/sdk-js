@@ -12,7 +12,7 @@ const decode = (h: string) => JSON.parse(Buffer.from(h, 'base64').toString())
 const pay = (id: string) => b64({ id })
 
 /** A P2Flux API that pays each payment id once - the property the helper relies on. */
-function api(over: { down?: boolean; badConfig?: boolean } = {}) {
+function api(over: { down?: boolean; badConfig?: boolean; rateLimited?: boolean; serverError?: boolean } = {}) {
   const calls: { path: string; body: Record<string, unknown> }[] = []
   const usedIds = new Set<string>()
   const state = { ...over }
@@ -22,6 +22,8 @@ function api(over: { down?: boolean; badConfig?: boolean } = {}) {
     calls.push({ path, body })
     if (state.down) throw new Error('ECONNREFUSED')
     if (state.badConfig) return new Response(JSON.stringify({ error: 'INVALID_REQUEST' }), { status: 400 })
+    if (state.rateLimited) return new Response(JSON.stringify({ error: 'RATE_LIMITED', action: 'RETRY_LATER' }), { status: 429 })
+    if (state.serverError) return new Response('bad gateway', { status: 502 })
     if (path.endsWith('/challenge') && body.usage === true) {
       return Response.json({ x402Version: 2, ttl: 3600, extensions: { eip2612GasSponsoring: { info: { version: '1' } } }, accepts: [{ scheme: 'upto', network: 'eip155:84532', amount: String(Math.round(Number(body.price) * 1e6)), payTo: '0xvault' }] })
     }
@@ -159,6 +161,33 @@ test('P2Flux unreachable: 503 with Retry-After by default, or free if the seller
   assert.equal((await paywallOn(api({ down: true })).guard({ url: URL_ })).allow, false)
   const free = await paywallOn(api({ down: true }), { onUnavailable: 'free' }).guard({ url: URL_ })
   assert.deepEqual(free, { allow: true, paid: false, headers: {} })
+})
+
+test('P2Flux refusing (429) is an answer, not an outage: 402 again, never free - and a 5xx is an outage', async () => {
+  // A flood of junk headers uses up the site's redeem allowance; the flooder must not get content for it.
+  const limited = api({ rateLimited: true })
+  for (const over of [{}, { onUnavailable: 'free' }]) {
+    const r = await paywallOn(limited, over).guard({ url: URL_, paymentHeader: pay('x') })
+    assert.equal(r.allow, false, JSON.stringify(over))
+    if (!r.allow) assert.equal(r.status, 503, 'the challenge itself is refused too, so the agent is told to retry')
+  }
+  // Redeem refused while the challenge still answers: a 402 with the reason, with or without `free`.
+  const mixed = api()
+  const base = mixed.fetchImpl
+  mixed.fetchImpl = (async (url: string, init: RequestInit) =>
+    String(url).endsWith('/redeem') ? new Response(JSON.stringify({ error: 'RATE_LIMITED' }), { status: 429 }) : base(url, init)) as unknown as typeof fetch
+  for (const over of [{}, { onUnavailable: 'free' }]) {
+    const r = await paywallOn(mixed, over).guard({ url: URL_, paymentHeader: pay('y') })
+    assert.equal(r.allow, false)
+    if (!r.allow) {
+      assert.equal(r.status, 402)
+      assert.equal((r.body as { error?: string }).error, 'rate_limited')
+    }
+  }
+  // A server failure is an outage: 503, or free when the seller chose so.
+  const broken = api({ serverError: true })
+  assert.equal((await paywallOn(broken).guard({ url: URL_, paymentHeader: pay('z') })).allow, false)
+  assert.deepEqual(await paywallOn(broken, { onUnavailable: 'free' }).guard({ url: URL_, paymentHeader: pay('z') }), { allow: true, paid: false, headers: {} })
 })
 
 test('a wallet or price P2Flux rejects is the seller configuration: it throws, it is not a 402 for the agent', async () => {

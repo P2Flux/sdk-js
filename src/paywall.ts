@@ -117,12 +117,14 @@ export function createPaywall(options: PaywallOptions) {
       ? { allow: true, paid: false, headers: {} }
       : { allow: false, status: 503, headers: { 'retry-after': '60', ...NO_STORE }, body: { error: 'payment_service_unavailable' } }
 
-  const accepts = async (price: string, usage = false): Promise<{ accepts: unknown[]; extensions?: unknown } | null> => {
+  const accepts = async (price: string, usage = false): Promise<{ accepts: unknown[]; extensions?: unknown } | null | 'refused'> => {
     const key = usage ? `upto:${price}` : price
     const hit = challenges.get(key)
     if (hit && hit.until > Date.now()) return hit
     const res = await post('/x402/paywall/challenge', { recipient: options.recipient, price, ...(usage ? { usage: true } : {}) })
     if (res?.status === 400) throw new Error(`P2Flux refused the paywall configuration (recipient ${options.recipient}, price ${price}): ${String(res.body.error ?? 'INVALID_REQUEST')}`)
+    // Refused (a rate limit) is an answer, never an outage to serve free through.
+    if (res && res.status > 400 && res.status < 500) return 'refused'
     if (!res || res.status !== 200 || !Array.isArray(res.body.accepts)) return null
     const list = options.prepaid === false ? res.body.accepts.filter((a) => (a as { scheme?: string })?.scheme !== 'batch-settlement') : res.body.accepts
     const ttl = Math.min(3600, Math.max(60, Number(res.body.ttl) || 600))
@@ -132,8 +134,11 @@ export function createPaywall(options: PaywallOptions) {
     return entry
   }
 
+  const refused = (): GuardResult => ({ allow: false, status: 503, headers: { 'retry-after': '60', ...NO_STORE }, body: { error: 'payment_service_busy' } })
+
   const required = async (input: GuardInput, price: string, error?: string, usage = false): Promise<GuardResult> => {
     const offer = await accepts(price, usage)
+    if (offer === 'refused') return refused()
     if (!offer) return unavailable()
     const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: offer.accepts, ...(offer.extensions ? { extensions: offer.extensions } : {}) }
     return { allow: false, status: 402, headers: { 'payment-required': b64(body), ...NO_STORE }, body }
@@ -152,6 +157,10 @@ export function createPaywall(options: PaywallOptions) {
 
     const res = await post('/x402/paywall/redeem', { recipient: options.recipient, price, payment: header, resource: input.url.slice(0, 2048) })
     if (res?.status === 400) throw new Error(`P2Flux refused the paywall configuration: ${String(res.body.error ?? 'INVALID_REQUEST')}`)
+    /* Only an unreachable or failing P2Flux is "unavailable" (which `onUnavailable: 'free'` may serve
+     * through). A refusal - a rate limit above all - is an answer: 402 again, never free, and never a
+     * 503 for every honest agent because somebody flooded junk headers. */
+    if (res && res.status > 400 && res.status < 500) return required(input, price, res.status === 429 ? 'rate_limited' : 'payment_refused')
     if (!res || res.status !== 200) return unavailable()
     const answer = res.body
     const remember = () => {

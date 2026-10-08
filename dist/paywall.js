@@ -84,6 +84,9 @@ export function createPaywall(options) {
         const res = await post('/x402/paywall/challenge', { recipient: options.recipient, price, ...(usage ? { usage: true } : {}) });
         if (res?.status === 400)
             throw new Error(`P2Flux refused the paywall configuration (recipient ${options.recipient}, price ${price}): ${String(res.body.error ?? 'INVALID_REQUEST')}`);
+        // Refused (a rate limit) is an answer, never an outage to serve free through.
+        if (res && res.status > 400 && res.status < 500)
+            return 'refused';
         if (!res || res.status !== 200 || !Array.isArray(res.body.accepts))
             return null;
         const list = options.prepaid === false ? res.body.accepts.filter((a) => a?.scheme !== 'batch-settlement') : res.body.accepts;
@@ -93,8 +96,11 @@ export function createPaywall(options) {
         challenges.set(key, entry);
         return entry;
     };
+    const refused = () => ({ allow: false, status: 503, headers: { 'retry-after': '60', ...NO_STORE }, body: { error: 'payment_service_busy' } });
     const required = async (input, price, error, usage = false) => {
         const offer = await accepts(price, usage);
+        if (offer === 'refused')
+            return refused();
         if (!offer)
             return unavailable();
         const body = { x402Version: 2, ...(error ? { error } : {}), resource: { url: input.url, mimeType: input.mimeType ?? 'application/json' }, accepts: offer.accepts, ...(offer.extensions ? { extensions: offer.extensions } : {}) };
@@ -116,6 +122,11 @@ export function createPaywall(options) {
         const res = await post('/x402/paywall/redeem', { recipient: options.recipient, price, payment: header, resource: input.url.slice(0, 2048) });
         if (res?.status === 400)
             throw new Error(`P2Flux refused the paywall configuration: ${String(res.body.error ?? 'INVALID_REQUEST')}`);
+        /* Only an unreachable or failing P2Flux is "unavailable" (which `onUnavailable: 'free'` may serve
+         * through). A refusal - a rate limit above all - is an answer: 402 again, never free, and never a
+         * 503 for every honest agent because somebody flooded junk headers. */
+        if (res && res.status > 400 && res.status < 500)
+            return required(input, price, res.status === 429 ? 'rate_limited' : 'payment_refused');
         if (!res || res.status !== 200)
             return unavailable();
         const answer = res.body;
