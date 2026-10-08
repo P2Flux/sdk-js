@@ -117,6 +117,8 @@ const ACTIONS = {
     LINK_EXPIRED: 'INVALID_REQUEST',
     LINK_UNAVAILABLE: 'INVALID_REQUEST',
     ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
+    PAYER_SANCTIONED: 'STOP_SUBSCRIPTION',
+    RECIPIENT_SANCTIONED: 'INVALID_REQUEST',
 };
 const linkTerms = (b) => ({
     kind: b.kind,
@@ -441,6 +443,7 @@ export function createP2Flux(options) {
                     ...(body.gas_payment_mode === undefined
                         ? {}
                         : { gasPaymentMode: body.gas_payment_mode }),
+                    ...(body.screening === undefined ? {} : { screening: body.screening }),
                     raw: body,
                 };
             }

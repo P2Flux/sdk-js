@@ -94,6 +94,11 @@ export type ChargeStatus =
   | 'LINK_EXPIRED'
   | 'LINK_UNAVAILABLE'
   | 'ALREADY_SUBSCRIBED'
+  /* Sanctions screening (no KYC): the paying wallet is on the U.S. OFAC list or restricted by the
+   * token issuer - stop charging it; or the merchant's receiving wallet is on the OFAC list - nothing
+   * can be created for or sent to it. Nothing was submitted in either case. */
+  | 'PAYER_SANCTIONED'
+  | 'RECIPIENT_SANCTIONED'
   | 'INVALID_SETUP_TOKEN'
   | 'SETUP_TOKEN_EXPIRED'
   | 'INVALID_CANCEL_TOKEN'
@@ -466,6 +471,12 @@ export type PaymentVerification =
        */
       accounting?: PaymentAccounting
       gasPaymentMode?: GasPaymentMode
+      /**
+       * Sanctions screening of the wallet that paid (and the one that signed) against the U.S. OFAC
+       * list: `sanctioned` - the payment stays valid, but P2Flux will not prepare a refund to that
+       * wallet; `unknown` - no list was loaded at that moment. Absent on older API builds.
+       */
+      screening?: 'clear' | 'sanctioned' | 'unknown'
       raw: Record<string, unknown>
     }
   | {
@@ -675,6 +686,8 @@ const ACTIONS: Record<string, MerchantAction> = {
   LINK_EXPIRED: 'INVALID_REQUEST',
   LINK_UNAVAILABLE: 'INVALID_REQUEST',
   ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
+  PAYER_SANCTIONED: 'STOP_SUBSCRIPTION',
+  RECIPIENT_SANCTIONED: 'INVALID_REQUEST',
 }
 
 /** Payment links: an invoice paid once, a fixed price paid many times, or a subscription P2Flux collects. */
@@ -1144,6 +1157,7 @@ export function createP2Flux(options: P2FluxOptions) {
           ...(body.gas_payment_mode === undefined
             ? {}
             : { gasPaymentMode: body.gas_payment_mode as GasPaymentMode }),
+          ...(body.screening === undefined ? {} : { screening: body.screening as 'clear' | 'sanctioned' | 'unknown' }),
           raw: body,
         }
       }
