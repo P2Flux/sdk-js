@@ -149,11 +149,10 @@ for (const { name, text, path } of documents) {
 
   test(`${name}: claims no feature this product lacks`, () => {
     /* Targeted phrases, not sentence parsing: each is something a reader would act on, and none can
-     * be true of P2Flux. There are no webhooks, there is no API key, and the sponsored path is a
-     * fee paid in USDC rather than a fee waived. */
+     * be true of P2Flux. Webhooks are optional and carry no signature, there is no API key, and the
+     * sponsored path is a fee paid in USDC rather than a fee waived. */
     for (const phrase of [
       'webhook secret', 'webhook signature', 'verify the webhook', 'register a webhook',
-      'webhook url', 'webhook endpoint', 'configure a webhook', 'webhook handler',
       'your api key', 'apikey', "'api_key'", 'authorization: bearer', 'x-api-key',
       'gas-free', 'gas free', 'free transaction', 'no network fee',
     ]) {
@@ -166,8 +165,8 @@ test('the two facts a developer must not guess are stated', () => {
   const says = (file: string, phrase: string) =>
     readFileSync(join(root, file), 'utf8').toLowerCase().includes(phrase)
 
-  assert.ok(says('README.md', 'no webhooks'))
-  assert.ok(says('docs/payment-flow.md', 'no webhooks'))
+  assert.ok(says('README.md', 'webhooks are optional'))
+  assert.ok(says('docs/payment-flow.md', 'webhooks are optional'))
   assert.ok(says('docs/getting-started.md', 'no api key'))
 })
 

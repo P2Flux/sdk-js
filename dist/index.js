@@ -269,7 +269,7 @@ export function createP2Flux(options) {
             raw: body,
         };
     };
-    return {
+    const client = {
         /**
          * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
          * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
@@ -301,6 +301,7 @@ export function createP2Flux(options) {
                 recipient: terms.recipient,
                 amount: terms.amount,
                 ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+                ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -316,6 +317,7 @@ export function createP2Flux(options) {
                     amountUnits: pay.amount_units,
                     reference: pay.reference,
                 },
+                ...(body.notify_url ? { notifyUrl: body.notify_url } : {}),
                 raw: body,
             };
         },
@@ -593,8 +595,9 @@ export function createP2Flux(options) {
                 ...(terms.period === undefined ? {} : { period: terms.period }),
                 ...(terms.periods === undefined ? {} : { periods: terms.periods }),
                 ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
+                ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
             });
-            return { ...linkTerms(body), link: body.link, manage: body.manage, raw: body };
+            return { ...linkTerms(body), link: body.link, manage: body.manage, ...(body.notify_url ? { notifyUrl: body.notify_url } : {}), raw: body };
         },
         /**
          * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token
@@ -934,5 +937,59 @@ export function createP2Flux(options) {
                 description: body.description,
             };
         },
+        /**
+         * Answer a webhook from P2Flux (the body of the POST to your `notifyUrl`, as a string or parsed).
+         *
+         * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
+         * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
+         * pass the `reference` you stored with the order (createPayment), or the `linkId` of your payment
+         * link, and for subscription events the link's `manage` token. Fulfil only when `confirmed` is
+         * true; acknowledge the POST with any 2xx either way. The same event can arrive more than once:
+         * deduplicate on `eventId`. Never throws on a wrong or forged event - only on a missing `expect`.
+         */
+        async handleNotification(notification, expect) {
+            if (!expect || (!expect.reference && !expect.linkId))
+                throw new TypeError('handleNotification needs expect.reference or expect.linkId');
+            let event;
+            try {
+                event = typeof notification === 'string' ? JSON.parse(notification) : notification;
+            }
+            catch {
+                return { confirmed: false, eventId: '', type: '', reason: 'MALFORMED' };
+            }
+            const eventId = String(event?.id ?? '');
+            const type = String(event?.type ?? '');
+            const data = (event?.data ?? {});
+            const no = (reason, extra = {}) => ({ confirmed: false, eventId, type, reason, ...extra });
+            const lower = (v) => String(v ?? '').toLowerCase();
+            if (type === 'payment.paid') {
+                if (typeof data.intent !== 'string' || typeof data.tx_hash !== 'string')
+                    return no('MALFORMED');
+                const verdict = await client.verifyPayment(data.intent, data.tx_hash);
+                if (!verdict.valid)
+                    return no(verdict.code, { payment: verdict });
+                // The reference comes from the API's verdict, not from the notification.
+                const ref = lower(verdict.reference);
+                const ours = expect.reference ? ref === lower(expect.reference) : ref.startsWith(lower(expect.linkId));
+                return ours ? { confirmed: true, eventId, type, payment: verdict } : no('NOT_YOUR_ORDER', { payment: verdict });
+            }
+            if (type === 'subscription.charged' || type === 'subscription.updated') {
+                if (!expect.manage)
+                    throw new TypeError('subscription events need expect.manage (the link\'s manage token)');
+                const status = await client.paymentLinkStatus({ manage: expect.manage });
+                if (expect.linkId && lower(status.id) !== lower(expect.linkId))
+                    return no('NOT_YOUR_ORDER');
+                if (lower(status.id) !== lower(data.link_id))
+                    return no('NOT_YOUR_ORDER');
+                const subscriber = status.subscribers?.find((s) => lower(s.subscriptionId) === lower(data.subscription_id));
+                if (!subscriber)
+                    return no('NOT_FOUND');
+                if (type === 'subscription.charged' && !(subscriber.lastPeriod >= Number(data.period_index)))
+                    return no('NOT_CHARGED', { subscriber });
+                return { confirmed: true, eventId, type, subscriber };
+            }
+            return no('UNKNOWN_EVENT');
+        },
     };
+    return client;
 }

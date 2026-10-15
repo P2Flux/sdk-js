@@ -198,6 +198,11 @@ export type PaymentTerms = {
     amount: string;
     /** Omit for `native`. Existing integrations keep their current behaviour and fees exactly. */
     gasPaymentMode?: GasPaymentMode;
+    /**
+     * Optional webhook: a public https URL P2Flux POSTs a `payment.paid` event to once this payment is
+     * verified on chain. Omit it and nothing changes. Answer it with `handleNotification`.
+     */
+    notifyUrl?: string;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -249,6 +254,8 @@ export type PaymentIntent = {
         amountUnits: string;
         reference: string;
     };
+    /** Present when the payment was created with `notifyUrl`. */
+    notifyUrl?: string;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms a checkout should display, read back from an intent. */
@@ -474,6 +481,11 @@ export type PaymentLinkTerms = {
     periods?: number;
     /** Subscriptions: days without a payment after which a subscriber is paused (1..90, default 7). */
     suspendAfterDays?: number;
+    /**
+     * Optional webhook for every payment through the link: `payment.paid` (one-time kinds) or
+     * `subscription.charged` / `subscription.updated`. Answer it with `handleNotification`.
+     */
+    notifyUrl?: string;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -498,7 +510,22 @@ export type PaymentLink = PaymentLinkTermsView & {
     link: string;
     /** The private manage token. Your overview: `checkoutLink('links', manage)`. Keep it private. */
     manage: string;
+    /** Present when the link was created with `notifyUrl`. */
+    notifyUrl?: string;
     raw: Record<string, unknown>;
+};
+/** What `handleNotification` concluded about one webhook. Fulfil only when `confirmed`. */
+export type NotificationResult = {
+    confirmed: boolean;
+    /** Deduplicate on this: the same event can be delivered more than once. */
+    eventId: string;
+    type: 'payment.paid' | 'subscription.charged' | 'subscription.updated' | string;
+    /** Why it is not confirmed: a verify code (e.g. PAYMENT_CONFIRMING), NOT_YOUR_ORDER, NOT_FOUND, NOT_CHARGED, MALFORMED, UNKNOWN_EVENT. */
+    reason?: string;
+    /** payment.paid: the API's own verdict. */
+    payment?: PaymentVerification;
+    /** subscription.*: the subscriber as the manage view shows it now. */
+    subscriber?: PaymentLinkSubscriber;
 };
 export type PaymentLinkPayment = {
     txHash: string;
@@ -813,5 +840,20 @@ export declare function createP2Flux(options: P2FluxOptions): {
     resolveRefund(refundToken: string): Promise<ResolvedRefund>;
     /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */
     prepareAllowanceRevocation(): Promise<PreparedTransaction>;
+    /**
+     * Answer a webhook from P2Flux (the body of the POST to your `notifyUrl`, as a string or parsed).
+     *
+     * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
+     * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
+     * pass the `reference` you stored with the order (createPayment), or the `linkId` of your payment
+     * link, and for subscription events the link's `manage` token. Fulfil only when `confirmed` is
+     * true; acknowledge the POST with any 2xx either way. The same event can arrive more than once:
+     * deduplicate on `eventId`. Never throws on a wrong or forged event - only on a missing `expect`.
+     */
+    handleNotification(notification: string | Record<string, unknown>, expect: {
+        reference?: string;
+        linkId?: string;
+        manage?: string;
+    }): Promise<NotificationResult>;
 };
 export type P2Flux = ReturnType<typeof createP2Flux>;

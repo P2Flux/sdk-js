@@ -315,3 +315,70 @@ test('checkoutLink: refuses what would be a wrong or unsafe link - at the link, 
   assert.throws(() => live.checkoutLink('pay', ''), TypeError)
   assert.throws(() => live.checkoutLink('admin' as 'pay', 't'), TypeError)
 })
+
+// --- webhooks: a notification is a hint, confirmed by asking the API again ------------------------
+
+const routed = (answers: Record<string, unknown>) => {
+  const calls: { url: string; body: Record<string, unknown> }[] = []
+  const impl = (async (url: string, init: { body: string }) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) })
+    const path = new URL(String(url)).pathname
+    return { status: 200, json: async () => answers[path] } as never
+  }) as unknown as typeof fetch
+  return { impl, calls }
+}
+const REF = `0x${'12'.repeat(32)}`
+const TXH = `0x${'ab'.repeat(32)}`
+const paidEvent = { id: `0x${'99'.repeat(32)}`, type: 'payment.paid', created_at: 1, chain_id: 84532, data: { intent: 'p2i1.x', tx_hash: TXH, reference: REF } }
+
+test('createPayment sends notify_url only when given', async () => {
+  const { impl, calls } = answering(200, { intent: 'p2i1.x', reference: REF, amount: '10.00', expires_at: 1, pay: {}, notify_url: 'https://shop.example.com/n' })
+  const plain = await client(impl).createPayment({ recipient: '0x1', amount: '10.00' })
+  assert.equal('notify_url' in (calls[0]!.body as object), false)
+  assert.equal(plain.notifyUrl, 'https://shop.example.com/n')
+  await client(impl).createPayment({ recipient: '0x1', amount: '10.00', notifyUrl: 'https://shop.example.com/n' })
+  assert.equal((calls[1]!.body as { notify_url: string }).notify_url, 'https://shop.example.com/n')
+})
+
+test('handleNotification confirms a payment.paid only through verify, for your reference', async () => {
+  const { impl, calls } = routed({ '/v1/payments/verify': { valid: true, tx_hash: TXH, reference: REF, amount: '10.00' } })
+  const ok = await client(impl).handleNotification(JSON.stringify(paidEvent), { reference: REF })
+  assert.equal(ok.confirmed, true)
+  assert.equal(ok.eventId, paidEvent.id)
+  assert.deepEqual(calls[0]!.body, { intent: 'p2i1.x', tx_hash: TXH })
+
+  const other = await client(impl).handleNotification(paidEvent, { reference: `0x${'34'.repeat(32)}` })
+  assert.equal(other.confirmed, false)
+  assert.equal(other.reason, 'NOT_YOUR_ORDER')
+
+  // Link payments: the verified reference starts with your link id.
+  const link = await client(impl).handleNotification(paidEvent, { linkId: REF.slice(0, 34) })
+  assert.equal(link.confirmed, true)
+})
+
+test('handleNotification never confirms what verify does not', async () => {
+  const { impl } = routed({ '/v1/payments/verify': { valid: false, code: 'TERMS_MISMATCH' } })
+  const forged = await client(impl).handleNotification(paidEvent, { reference: REF })
+  assert.equal(forged.confirmed, false)
+  assert.equal(forged.reason, 'TERMS_MISMATCH')
+  assert.equal((await client(impl).handleNotification('{not json', { reference: REF })).reason, 'MALFORMED')
+  assert.equal((await client(impl).handleNotification({ type: 'payment.paid', data: {} }, { reference: REF })).reason, 'MALFORMED')
+  await assert.rejects(() => client(impl).handleNotification(paidEvent, {}), TypeError)
+})
+
+test('handleNotification confirms subscription events against the manage view', async () => {
+  const LINK = `0x${'01'.repeat(16)}`
+  const SUB = `0x${'cd'.repeat(32)}`
+  const { impl } = routed({
+    '/v1/links/status': { kind: 'subscription', id: LINK, state: 'open', subscribers: [{ subscription_id: SUB, payer: '0x2', state: 'active', started_at: 1, last_period: 1 }] },
+  })
+  const event = { id: `0x${'77'.repeat(32)}`, type: 'subscription.charged', data: { link_id: LINK, subscription_id: SUB, period_index: 1 } }
+  const ok = await client(impl).handleNotification(event, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(ok.confirmed, true)
+  assert.equal(ok.subscriber?.lastPeriod, 1)
+  const ahead = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 2 } }, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(ahead.reason, 'NOT_CHARGED')
+  const foreign = await client(impl).handleNotification({ ...event, data: { ...event.data, link_id: `0x${'02'.repeat(16)}` } }, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(foreign.reason, 'NOT_YOUR_ORDER')
+  await assert.rejects(() => client(impl).handleNotification(event, { linkId: LINK }), TypeError)
+})
