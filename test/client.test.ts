@@ -329,7 +329,9 @@ const routed = (answers: Record<string, unknown>) => {
 }
 const REF = `0x${'12'.repeat(32)}`
 const TXH = `0x${'ab'.repeat(32)}`
-const paidEvent = { id: `0x${'99'.repeat(32)}`, type: 'payment.paid', created_at: 1, chain_id: 84532, data: { intent: 'p2i1.x', tx_hash: TXH, reference: REF } }
+const intentFor = (reference: string) => `p2f1.k1.${Buffer.from(JSON.stringify({ v: 1, reference })).toString('base64url')}.mac`
+const INTENT = intentFor(REF)
+const paidEvent = { id: `0x${'99'.repeat(32)}`, type: 'payment.paid', created_at: 1, chain_id: 84532, data: { intent: INTENT, tx_hash: TXH, reference: REF } }
 
 test('createPayment sends notify_url only when given', async () => {
   const { impl, calls } = answering(200, { intent: 'p2i1.x', reference: REF, amount: '10.00', expires_at: 1, pay: {}, notify_url: 'https://shop.example.com/n' })
@@ -346,7 +348,7 @@ test('handleNotification confirms a payment.paid only through verify, for your r
   assert.equal(ok.confirmed, true)
   assert.equal(ok.eventId, paidEvent.id)
   assert.equal(ok.dedupeKey, `${REF}:${TXH}`)
-  assert.deepEqual(calls[0]!.body, { intent: 'p2i1.x', tx_hash: TXH })
+  assert.deepEqual(calls[0]!.body, { intent: INTENT, tx_hash: TXH })
 
   // The same real payment replayed with a fresh event id: the dedupe key does not change.
   const replay = await client(impl).handleNotification({ ...paidEvent, id: `0x${'55'.repeat(32)}` }, { reference: REF })
@@ -374,6 +376,14 @@ test('handleNotification never confirms what verify does not', async () => {
   // A forged intent the API refuses outright is an answer, not an exception.
   const refusing = answering(400, { error: 'INVALID_INTENT' })
   assert.equal((await client(refusing.impl).handleNotification(paidEvent, { reference: REF })).reason, 'INVALID_INTENT')
+  // An intent for another order, with this order's reference written next to it: refused locally.
+  const before = refusing.calls.length
+  const swapped = { ...paidEvent, data: { ...paidEvent.data, intent: intentFor(`0x${'34'.repeat(32)}`) } }
+  assert.equal((await client(refusing.impl).handleNotification(swapped, { reference: REF })).reason, 'NOT_YOUR_ORDER')
+  assert.equal(refusing.calls.length, before)
+  // Not final yet: thrown, so the endpoint answers 5xx and the notification comes again.
+  const { impl: confirming } = routed({ '/v1/payments/verify': { valid: false, code: 'PAYMENT_CONFIRMING' } })
+  await assert.rejects(() => client(confirming).handleNotification(paidEvent, { reference: REF }), P2FluxError)
   assert.equal((await client(impl).handleNotification('{not json', { reference: REF })).reason, 'MALFORMED')
   assert.equal((await client(impl).handleNotification({ type: 'payment.paid', data: {} }, { reference: REF })).reason, 'MALFORMED')
   await assert.rejects(() => client(impl).handleNotification(paidEvent, {}), TypeError)
@@ -392,6 +402,13 @@ test('handleNotification confirms subscription events against the manage view', 
   assert.equal(ok.subscriber?.lastPeriod, 1)
   const ahead = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 2 } }, { linkId: LINK, manage: 'p2lm.x' })
   assert.equal(ahead.reason, 'NOT_CHARGED')
+  // An older (or skipped, never paid) period replayed: not confirmed, no new key to credit.
+  const older = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 0 } }, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(older.reason, 'NOT_CURRENT')
+  const updated = await client(impl).handleNotification({ ...event, type: 'subscription.updated' }, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(updated.confirmed, true)
+  assert.equal(updated.dedupeKey, undefined, 'apply the state; no key that could collide')
+  assert.equal(updated.subscriber?.state, 'active')
   const notANumber = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 'x' } }, { linkId: LINK, manage: 'p2lm.x' })
   assert.equal(notANumber.reason, 'MALFORMED')
   const foreign = await client(impl).handleNotification({ ...event, data: { ...event.data, link_id: `0x${'02'.repeat(16)}` } }, { linkId: LINK, manage: 'p2lm.x' })

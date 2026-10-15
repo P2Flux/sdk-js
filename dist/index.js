@@ -209,6 +209,19 @@ const networkFeeQuote = (raw) => ({
     quote: raw.quote,
     raw,
 });
+/** The reference inside a P2Flux intent token, read without checking its signature (the API checks that). */
+function intentReference(intent) {
+    try {
+        const part = intent.split('.')[2] ?? '';
+        const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+        const json = typeof atob === 'function' ? atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)) : '';
+        const reference = JSON.parse(json).reference;
+        return typeof reference === 'string' ? reference : '';
+    }
+    catch {
+        return '';
+    }
+}
 export function createP2Flux(options) {
     const base = options.apiUrl.replace(/\/$/, '');
     const timeoutMs = options.timeoutMs ?? 60_000;
@@ -943,14 +956,19 @@ export function createP2Flux(options) {
          * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
          * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
          * pass the `reference` you stored with the order (createPayment), or your payment link's `linkId`
-         * (plus its `manage` token for subscription events). Fulfil only when `confirmed` is true, and
-         * idempotently on `dedupeKey` - built from the VERIFIED payment (reference and transaction, or
-         * subscription and period), never from the event's own id, which anyone can make up. Acknowledge the
-         * POST with any 2xx either way.
+         * (plus its `manage` token for subscription events).
          *
-         * A wrong, forged or replayed event returns `confirmed: false`; nothing is asked of the API when the
-         * event does not even name your order. Throws only on a missing `expect` (TypeError) or when the API
-         * cannot answer (P2FluxError / network): answer the POST with a 5xx then, and it is retried.
+         * - `payment.paid` confirmed: fulfil idempotently on `dedupeKey` (`reference:txHash`, from the API's
+         *   verdict - never the event's own id, which anyone can make up).
+         * - `subscription.charged` confirmed: the subscriber is paid through `subscriber.lastPeriod`; grant
+         *   access up to there (idempotent on `dedupeKey`), never "one more period per event".
+         * - `subscription.updated` confirmed: apply `subscriber.state` as it is now (no `dedupeKey`: setting a
+         *   state twice is harmless, skipping one is not).
+         *
+         * Answer the POST with a 2xx when this returns. It THROWS when the answer is not final yet (a payment
+         * still confirming, the API busy or unreachable): answer with a 5xx then, and P2Flux sends it again.
+         * A wrong, forged or replayed event returns `confirmed: false`, and when the event does not even name
+         * your order nothing is asked of the API. TypeError on a missing or malformed `expect`.
          */
         async handleNotification(notification, expect) {
             if (!expect || (!expect.reference && !expect.linkId))
@@ -967,12 +985,15 @@ export function createP2Flux(options) {
             catch {
                 return { confirmed: false, eventId: '', type: '', reason: 'MALFORMED' };
             }
-            const eventId = String(event?.id ?? '');
-            const type = String(event?.type ?? '');
-            const data = (event?.data ?? {});
+            const eventId = typeof event?.id === 'string' ? event.id : '';
+            const type = typeof event?.type === 'string' ? event.type : '';
+            const data = (event?.data && typeof event.data === 'object' ? event.data : {});
             const no = (reason, extra = {}) => ({ confirmed: false, eventId, type, reason, ...extra });
-            const lower = (v) => String(v ?? '').toLowerCase();
-            const ours = (reference) => (expect.reference ? lower(reference) === lower(expect.reference) : lower(reference).startsWith(lower(expect.linkId)));
+            const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : '');
+            const ours = (reference) => {
+                const ref = lower(reference);
+                return /^0x[0-9a-f]{64}$/.test(ref) && (expect.reference ? ref === lower(expect.reference) : ref.startsWith(lower(expect.linkId)));
+            };
             // An answer about the request (a bad intent, an unknown link) is a verdict; the API being unreachable is not.
             const asked = async (work) => {
                 try {
@@ -987,13 +1008,18 @@ export function createP2Flux(options) {
             if (type === 'payment.paid') {
                 if (typeof data.intent !== 'string' || typeof data.tx_hash !== 'string')
                     return no('MALFORMED');
-                if (!ours(data.reference))
+                // Read (not trusted) locally: an intent for another order is refused without spending an API call.
+                if (!ours(data.reference) || !ours(intentReference(data.intent)))
                     return no('NOT_YOUR_ORDER');
                 const verdict = await asked(() => client.verifyPayment(data.intent, data.tx_hash));
                 if ('confirmed' in verdict)
                     return verdict;
-                if (!verdict.valid)
+                if (!verdict.valid) {
+                    // Not final yet (still confirming, RPC trouble): throw, so the endpoint answers 5xx and it comes again.
+                    if (verdict.action === 'WAIT' || verdict.action === 'RETRY_LATER')
+                        throw new P2FluxError(verdict.code, verdict.action, verdict.raw);
                     return no(verdict.code, { payment: verdict });
+                }
                 // The reference that counts is the API's, from the verdict - not the one in the notification.
                 if (!ours(verdict.reference))
                     return no('NOT_YOUR_ORDER', { payment: verdict });
@@ -1015,13 +1041,13 @@ export function createP2Flux(options) {
                 const subscriber = status.subscribers?.find((s) => lower(s.subscriptionId) === lower(data.subscription_id));
                 if (!subscriber)
                     return no('NOT_FOUND');
-                if (type === 'subscription.charged') {
-                    if (subscriber.lastPeriod < period)
-                        return no('NOT_CHARGED', { subscriber });
-                    return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${period}`, subscriber };
-                }
-                // The state that counts is the one the manage view shows now: grant access from it, not per event.
-                return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${subscriber.state}:${subscriber.lastPeriod}`, subscriber };
+                if (type === 'subscription.updated')
+                    return { confirmed: true, eventId, type, subscriber };
+                /* Only the subscriber's latest collected period: an older one (or one skipped and never paid) is
+                 * not something to grant now - a newer charge event covers the subscription. */
+                if (period !== subscriber.lastPeriod)
+                    return no(period < subscriber.lastPeriod ? 'NOT_CURRENT' : 'NOT_CHARGED', { subscriber });
+                return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${subscriber.lastPeriod}`, subscriber };
             }
             return no('UNKNOWN_EVENT');
         },

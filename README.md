@@ -100,7 +100,7 @@ Pass `notifyUrl` (a public https URL) to `createPayment` or `createPaymentLink` 
 carries no secret - it is a hint - so confirm it before fulfilling:
 
 ```ts
-// your notify endpoint (answer 2xx whatever the outcome)
+// your notify endpoint: 2xx when this returns, 5xx when it throws (not final yet - it is sent again)
 const result = await p2flux.handleNotification(rawBody, { reference: order.p2fluxReference })
 if (result.confirmed) markOrderPaid(order, result.dedupeKey!)  // idempotent on dedupeKey, never on the event id
 ```

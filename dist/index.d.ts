@@ -521,11 +521,12 @@ export type NotificationResult = {
     eventId: string;
     /**
      * When confirmed: what to fulfil idempotently on, built from the verified answer - `reference:txHash`
-     * for a payment, `subscriptionId:period` for a charge, `subscriptionId:state:lastPeriod` for an update.
+     * for a payment, `subscriptionId:lastPeriod` for a charge. Absent for `subscription.updated`: apply
+     * `subscriber.state`.
      */
     dedupeKey?: string;
     type: 'payment.paid' | 'subscription.charged' | 'subscription.updated' | string;
-    /** Why it is not confirmed: a verify code (e.g. PAYMENT_CONFIRMING), NOT_YOUR_ORDER, NOT_FOUND, NOT_CHARGED, MALFORMED, UNKNOWN_EVENT. */
+    /** Why it is not confirmed: a verify code (e.g. TERMS_MISMATCH), NOT_YOUR_ORDER, NOT_FOUND, NOT_CURRENT, NOT_CHARGED, MALFORMED, UNKNOWN_EVENT. */
     reason?: string;
     /** payment.paid: the API's own verdict. */
     payment?: PaymentVerification;
@@ -851,14 +852,19 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
      * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
      * pass the `reference` you stored with the order (createPayment), or your payment link's `linkId`
-     * (plus its `manage` token for subscription events). Fulfil only when `confirmed` is true, and
-     * idempotently on `dedupeKey` - built from the VERIFIED payment (reference and transaction, or
-     * subscription and period), never from the event's own id, which anyone can make up. Acknowledge the
-     * POST with any 2xx either way.
+     * (plus its `manage` token for subscription events).
      *
-     * A wrong, forged or replayed event returns `confirmed: false`; nothing is asked of the API when the
-     * event does not even name your order. Throws only on a missing `expect` (TypeError) or when the API
-     * cannot answer (P2FluxError / network): answer the POST with a 5xx then, and it is retried.
+     * - `payment.paid` confirmed: fulfil idempotently on `dedupeKey` (`reference:txHash`, from the API's
+     *   verdict - never the event's own id, which anyone can make up).
+     * - `subscription.charged` confirmed: the subscriber is paid through `subscriber.lastPeriod`; grant
+     *   access up to there (idempotent on `dedupeKey`), never "one more period per event".
+     * - `subscription.updated` confirmed: apply `subscriber.state` as it is now (no `dedupeKey`: setting a
+     *   state twice is harmless, skipping one is not).
+     *
+     * Answer the POST with a 2xx when this returns. It THROWS when the answer is not final yet (a payment
+     * still confirming, the API busy or unreachable): answer with a 5xx then, and P2Flux sends it again.
+     * A wrong, forged or replayed event returns `confirmed: false`, and when the event does not even name
+     * your order nothing is asked of the API. TypeError on a missing or malformed `expect`.
      */
     handleNotification(notification: string | Record<string, unknown>, expect: {
         reference?: string;
