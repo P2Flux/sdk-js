@@ -756,8 +756,13 @@ export type PaymentLink = PaymentLinkTermsView & {
 /** What `handleNotification` concluded about one webhook. Fulfil only when `confirmed`. */
 export type NotificationResult = {
   confirmed: boolean
-  /** Deduplicate on this: the same event can be delivered more than once. */
+  /** The event's own id, as sent. Informational only: anyone can make one up - deduplicate on `dedupeKey`. */
   eventId: string
+  /**
+   * When confirmed: what to fulfil idempotently on, built from the verified answer - `reference:txHash`
+   * for a payment, `subscriptionId:period` for a charge, `subscriptionId:state:lastPeriod` for an update.
+   */
+  dedupeKey?: string
   type: 'payment.paid' | 'subscription.charged' | 'subscription.updated' | string
   /** Why it is not confirmed: a verify code (e.g. PAYMENT_CONFIRMING), NOT_YOUR_ORDER, NOT_FOUND, NOT_CHARGED, MALFORMED, UNKNOWN_EVENT. */
   reason?: string
@@ -1735,10 +1740,15 @@ export function createP2Flux(options: P2FluxOptions) {
      *
      * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
      * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
-     * pass the `reference` you stored with the order (createPayment), or the `linkId` of your payment
-     * link, and for subscription events the link's `manage` token. Fulfil only when `confirmed` is
-     * true; acknowledge the POST with any 2xx either way. The same event can arrive more than once:
-     * deduplicate on `eventId`. Never throws on a wrong or forged event - only on a missing `expect`.
+     * pass the `reference` you stored with the order (createPayment), or your payment link's `linkId`
+     * (plus its `manage` token for subscription events). Fulfil only when `confirmed` is true, and
+     * idempotently on `dedupeKey` - built from the VERIFIED payment (reference and transaction, or
+     * subscription and period), never from the event's own id, which anyone can make up. Acknowledge the
+     * POST with any 2xx either way.
+     *
+     * A wrong, forged or replayed event returns `confirmed: false`; nothing is asked of the API when the
+     * event does not even name your order. Throws only on a missing `expect` (TypeError) or when the API
+     * cannot answer (P2FluxError / network): answer the POST with a 5xx then, and it is retried.
      */
     async handleNotification(
       notification: string | Record<string, unknown>,
@@ -1756,26 +1766,44 @@ export function createP2Flux(options: P2FluxOptions) {
       const data = (event?.data ?? {}) as Record<string, unknown>
       const no = (reason: string, extra: Partial<NotificationResult> = {}): NotificationResult => ({ confirmed: false, eventId, type, reason, ...extra })
       const lower = (v: unknown) => String(v ?? '').toLowerCase()
+      const ours = (reference: unknown) => (expect.reference ? lower(reference) === lower(expect.reference) : lower(reference).startsWith(lower(expect.linkId)))
+      // An answer about the request (a bad intent, an unknown link) is a verdict; the API being unreachable is not.
+      const asked = async <T>(work: () => Promise<T>): Promise<T | NotificationResult> => {
+        try {
+          return await work()
+        } catch (err) {
+          if (err instanceof P2FluxError && err.action === 'INVALID_REQUEST') return no(err.status)
+          throw err
+        }
+      }
 
       if (type === 'payment.paid') {
         if (typeof data.intent !== 'string' || typeof data.tx_hash !== 'string') return no('MALFORMED')
-        const verdict = await client.verifyPayment(data.intent, data.tx_hash)
+        if (!ours(data.reference)) return no('NOT_YOUR_ORDER')
+        const verdict = await asked(() => client.verifyPayment(data.intent as string, data.tx_hash as string))
+        if ('confirmed' in verdict) return verdict
         if (!verdict.valid) return no(verdict.code, { payment: verdict })
-        // The reference comes from the API's verdict, not from the notification.
-        const ref = lower(verdict.reference)
-        const ours = expect.reference ? ref === lower(expect.reference) : ref.startsWith(lower(expect.linkId))
-        return ours ? { confirmed: true, eventId, type, payment: verdict } : no('NOT_YOUR_ORDER', { payment: verdict })
+        // The reference that counts is the API's, from the verdict - not the one in the notification.
+        if (!ours(verdict.reference)) return no('NOT_YOUR_ORDER', { payment: verdict })
+        return { confirmed: true, eventId, type, dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`, payment: verdict }
       }
 
       if (type === 'subscription.charged' || type === 'subscription.updated') {
-        if (!expect.manage) throw new TypeError('subscription events need expect.manage (the link\'s manage token)')
-        const status = await client.paymentLinkStatus({ manage: expect.manage })
-        if (expect.linkId && lower(status.id) !== lower(expect.linkId)) return no('NOT_YOUR_ORDER')
-        if (lower(status.id) !== lower(data.link_id)) return no('NOT_YOUR_ORDER')
+        if (!expect.manage || !expect.linkId) throw new TypeError('subscription events need expect.linkId and expect.manage (the link\'s manage token)')
+        if (lower(data.link_id) !== lower(expect.linkId)) return no('NOT_YOUR_ORDER')
+        const period = data.period_index
+        if (type === 'subscription.charged' && !(typeof period === 'number' && Number.isSafeInteger(period) && period >= 0)) return no('MALFORMED')
+        const status = await asked(() => client.paymentLinkStatus({ manage: expect.manage! }))
+        if ('confirmed' in status) return status
+        if (lower(status.id) !== lower(expect.linkId)) return no('NOT_YOUR_ORDER')
         const subscriber = status.subscribers?.find((s) => lower(s.subscriptionId) === lower(data.subscription_id))
         if (!subscriber) return no('NOT_FOUND')
-        if (type === 'subscription.charged' && !(subscriber.lastPeriod >= Number(data.period_index))) return no('NOT_CHARGED', { subscriber })
-        return { confirmed: true, eventId, type, subscriber }
+        if (type === 'subscription.charged') {
+          if (subscriber.lastPeriod < (period as number)) return no('NOT_CHARGED', { subscriber })
+          return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${period}`, subscriber }
+        }
+        // The state that counts is the one the manage view shows now.
+        return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${subscriber.state}:${subscriber.lastPeriod}`, subscriber }
       }
 
       return no('UNKNOWN_EVENT')

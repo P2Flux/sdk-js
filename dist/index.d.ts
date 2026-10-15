@@ -517,8 +517,13 @@ export type PaymentLink = PaymentLinkTermsView & {
 /** What `handleNotification` concluded about one webhook. Fulfil only when `confirmed`. */
 export type NotificationResult = {
     confirmed: boolean;
-    /** Deduplicate on this: the same event can be delivered more than once. */
+    /** The event's own id, as sent. Informational only: anyone can make one up - deduplicate on `dedupeKey`. */
     eventId: string;
+    /**
+     * When confirmed: what to fulfil idempotently on, built from the verified answer - `reference:txHash`
+     * for a payment, `subscriptionId:period` for a charge, `subscriptionId:state:lastPeriod` for an update.
+     */
+    dedupeKey?: string;
     type: 'payment.paid' | 'subscription.charged' | 'subscription.updated' | string;
     /** Why it is not confirmed: a verify code (e.g. PAYMENT_CONFIRMING), NOT_YOUR_ORDER, NOT_FOUND, NOT_CHARGED, MALFORMED, UNKNOWN_EVENT. */
     reason?: string;
@@ -845,10 +850,15 @@ export declare function createP2Flux(options: P2FluxOptions): {
      *
      * A notification is a hint, never a proof: it carries no secret. This asks the API again - verify
      * for a payment, the manage view for a subscription - and checks the answer belongs to YOUR order:
-     * pass the `reference` you stored with the order (createPayment), or the `linkId` of your payment
-     * link, and for subscription events the link's `manage` token. Fulfil only when `confirmed` is
-     * true; acknowledge the POST with any 2xx either way. The same event can arrive more than once:
-     * deduplicate on `eventId`. Never throws on a wrong or forged event - only on a missing `expect`.
+     * pass the `reference` you stored with the order (createPayment), or your payment link's `linkId`
+     * (plus its `manage` token for subscription events). Fulfil only when `confirmed` is true, and
+     * idempotently on `dedupeKey` - built from the VERIFIED payment (reference and transaction, or
+     * subscription and period), never from the event's own id, which anyone can make up. Acknowledge the
+     * POST with any 2xx either way.
+     *
+     * A wrong, forged or replayed event returns `confirmed: false`; nothing is asked of the API when the
+     * event does not even name your order. Throws only on a missing `expect` (TypeError) or when the API
+     * cannot answer (P2FluxError / network): answer the POST with a 5xx then, and it is retried.
      */
     handleNotification(notification: string | Record<string, unknown>, expect: {
         reference?: string;

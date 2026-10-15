@@ -345,11 +345,18 @@ test('handleNotification confirms a payment.paid only through verify, for your r
   const ok = await client(impl).handleNotification(JSON.stringify(paidEvent), { reference: REF })
   assert.equal(ok.confirmed, true)
   assert.equal(ok.eventId, paidEvent.id)
+  assert.equal(ok.dedupeKey, `${REF}:${TXH}`)
   assert.deepEqual(calls[0]!.body, { intent: 'p2i1.x', tx_hash: TXH })
 
+  // The same real payment replayed with a fresh event id: the dedupe key does not change.
+  const replay = await client(impl).handleNotification({ ...paidEvent, id: `0x${'55'.repeat(32)}` }, { reference: REF })
+  assert.equal(replay.dedupeKey, ok.dedupeKey)
+
+  // Another order's notification: refused before the API is asked.
+  const before = calls.length
   const other = await client(impl).handleNotification(paidEvent, { reference: `0x${'34'.repeat(32)}` })
-  assert.equal(other.confirmed, false)
   assert.equal(other.reason, 'NOT_YOUR_ORDER')
+  assert.equal(calls.length, before)
 
   // Link payments: the verified reference starts with your link id.
   const link = await client(impl).handleNotification(paidEvent, { linkId: REF.slice(0, 34) })
@@ -361,6 +368,12 @@ test('handleNotification never confirms what verify does not', async () => {
   const forged = await client(impl).handleNotification(paidEvent, { reference: REF })
   assert.equal(forged.confirmed, false)
   assert.equal(forged.reason, 'TERMS_MISMATCH')
+  // The notification names your reference, the API's verdict another: not yours.
+  const { impl: lying } = routed({ '/v1/payments/verify': { valid: true, tx_hash: TXH, reference: `0x${'34'.repeat(32)}` } })
+  assert.equal((await client(lying).handleNotification(paidEvent, { reference: REF })).reason, 'NOT_YOUR_ORDER')
+  // A forged intent the API refuses outright is an answer, not an exception.
+  const refusing = answering(400, { error: 'INVALID_INTENT' })
+  assert.equal((await client(refusing.impl).handleNotification(paidEvent, { reference: REF })).reason, 'INVALID_INTENT')
   assert.equal((await client(impl).handleNotification('{not json', { reference: REF })).reason, 'MALFORMED')
   assert.equal((await client(impl).handleNotification({ type: 'payment.paid', data: {} }, { reference: REF })).reason, 'MALFORMED')
   await assert.rejects(() => client(impl).handleNotification(paidEvent, {}), TypeError)
@@ -375,9 +388,12 @@ test('handleNotification confirms subscription events against the manage view', 
   const event = { id: `0x${'77'.repeat(32)}`, type: 'subscription.charged', data: { link_id: LINK, subscription_id: SUB, period_index: 1 } }
   const ok = await client(impl).handleNotification(event, { linkId: LINK, manage: 'p2lm.x' })
   assert.equal(ok.confirmed, true)
+  assert.equal(ok.dedupeKey, `${SUB}:1`)
   assert.equal(ok.subscriber?.lastPeriod, 1)
   const ahead = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 2 } }, { linkId: LINK, manage: 'p2lm.x' })
   assert.equal(ahead.reason, 'NOT_CHARGED')
+  const notANumber = await client(impl).handleNotification({ ...event, data: { ...event.data, period_index: 'x' } }, { linkId: LINK, manage: 'p2lm.x' })
+  assert.equal(notANumber.reason, 'MALFORMED')
   const foreign = await client(impl).handleNotification({ ...event, data: { ...event.data, link_id: `0x${'02'.repeat(16)}` } }, { linkId: LINK, manage: 'p2lm.x' })
   assert.equal(foreign.reason, 'NOT_YOUR_ORDER')
   await assert.rejects(() => client(impl).handleNotification(event, { linkId: LINK }), TypeError)

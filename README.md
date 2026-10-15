@@ -102,12 +102,13 @@ carries no secret - it is a hint - so confirm it before fulfilling:
 ```ts
 // your notify endpoint (answer 2xx whatever the outcome)
 const result = await p2flux.handleNotification(rawBody, { reference: order.p2fluxReference })
-if (result.confirmed) markOrderPaid(order, result.payment!.txHash)  // dedupe on result.eventId
+if (result.confirmed) markOrderPaid(order, result.dedupeKey!)  // idempotent on dedupeKey, never on the event id
 ```
 
 `handleNotification` asks the API again (`verifyPayment`, or the link's manage view for
-subscriptions with `{ linkId, manage }`) and checks the answer is for YOUR order. Without
-`notifyUrl` nothing changes: keep polling as above.
+subscriptions with `{ linkId, manage }`) and checks the answer is for YOUR order. If the create
+response has no `notifyUrl`, the payment is not watched (the service is at capacity): keep polling as
+above, exactly as without webhooks.
 
 Full walk-through: [The payment lifecycle](docs/payment-flow.md).
 
