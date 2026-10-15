@@ -1755,6 +1755,9 @@ export function createP2Flux(options: P2FluxOptions) {
       expect: { reference?: string; linkId?: string; manage?: string },
     ): Promise<NotificationResult> {
       if (!expect || (!expect.reference && !expect.linkId)) throw new TypeError('handleNotification needs expect.reference or expect.linkId')
+      // A malformed id would match too much ("0x" is a prefix of every reference).
+      if (expect.reference && !/^0x[0-9a-fA-F]{64}$/.test(expect.reference)) throw new TypeError('expect.reference must be the 32-byte reference from createPayment')
+      if (expect.linkId && !/^0x[0-9a-fA-F]{32}$/.test(expect.linkId)) throw new TypeError('expect.linkId must be the 16-byte link id')
       let event: Record<string, unknown>
       try {
         event = typeof notification === 'string' ? (JSON.parse(notification) as Record<string, unknown>) : notification
@@ -1802,7 +1805,7 @@ export function createP2Flux(options: P2FluxOptions) {
           if (subscriber.lastPeriod < (period as number)) return no('NOT_CHARGED', { subscriber })
           return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${period}`, subscriber }
         }
-        // The state that counts is the one the manage view shows now.
+        // The state that counts is the one the manage view shows now: grant access from it, not per event.
         return { confirmed: true, eventId, type, dedupeKey: `${lower(subscriber.subscriptionId)}:${subscriber.state}:${subscriber.lastPeriod}`, subscriber }
       }
 
