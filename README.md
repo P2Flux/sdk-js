@@ -114,7 +114,8 @@ above, exactly as without webhooks.
 
 Prefer sending the buyer to P2Flux's page and getting them back over opening a window? Every create
 result carries `checkoutUrl` (the hosted page for that payment or link). Pass `returnUrl` and, after
-paying, the page shows **Back to store** and, when it was not opened as a window, goes back by itself:
+paying, the page shows a button back to your site and, for a payment it was not opened as a window
+for, goes back by itself (links: the button only):
 
 ```ts
 const payment = await p2flux.createPayment({ recipient, amount: '25.00', returnUrl: 'https://shop.example/order/42' })
