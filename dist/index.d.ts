@@ -203,6 +203,12 @@ export type PaymentTerms = {
      * verified on chain. Omit it and nothing changes. Answer it with `handleNotification`.
      */
     notifyUrl?: string;
+    /**
+     * Optional: where the hosted checkout sends the buyer after paying (https; http on the test network
+     * only). The buyer arrives with `p2flux_reference`, `p2flux_tx` and `p2flux_status` (`paid` or
+     * `confirming`) in the query. A convenience, never proof: confirm with `verifyPayment` or a webhook.
+     */
+    returnUrl?: string;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -256,6 +262,10 @@ export type PaymentIntent = {
     };
     /** Present when the payment was created with `notifyUrl`. */
     notifyUrl?: string;
+    /** Present when the payment was created with `returnUrl`. */
+    returnUrl?: string;
+    /** P2Flux's hosted payment page for this payment: send the buyer here. Absent from older APIs. */
+    checkoutUrl?: string;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms a checkout should display, read back from an intent. */
@@ -273,6 +283,8 @@ export type ResolvedPayment = {
     gasPaymentMode: GasPaymentMode;
     /** Present only in `payment_token` mode: what the buyer will pay for the network, and until when. */
     networkFeeQuote?: NetworkFeeQuote;
+    /** Present when the payment carries a return URL. */
+    returnUrl?: string;
     raw: Record<string, unknown>;
 };
 /** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
@@ -486,6 +498,8 @@ export type PaymentLinkTerms = {
      * `subscription.charged` / `subscription.updated`. Answer it with `handleNotification`.
      */
     notifyUrl?: string;
+    /** Optional: where the hosted checkout sends the buyer after paying, as for a payment (subscriptions: `p2flux_subscription` instead of `p2flux_reference`). */
+    returnUrl?: string;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -496,6 +510,7 @@ export type PaymentLinkTermsView = {
     amount: string;
     amountUnits: string;
     label?: string;
+    returnUrl?: string;
     createdAt: number;
     expiresAt: number;
     /** One-time kinds. */
@@ -512,6 +527,8 @@ export type PaymentLink = PaymentLinkTermsView & {
     manage: string;
     /** Present when the link was created with `notifyUrl`. */
     notifyUrl?: string;
+    /** P2Flux's hosted payment page for this link. Absent from older APIs. */
+    checkoutUrl?: string;
     raw: Record<string, unknown>;
 };
 /** What `handleNotification` concluded about one webhook. Fulfil only when `confirmed`. */

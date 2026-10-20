@@ -110,6 +110,21 @@ subscriptions with `{ linkId, manage }`) and checks the answer is for YOUR order
 response has no `notifyUrl`, the payment is not watched (the service is at capacity): keep polling as
 above, exactly as without webhooks.
 
+### Redirect checkout: `returnUrl` and `checkoutUrl`
+
+Prefer sending the buyer to P2Flux's page and getting them back over opening a window? Every create
+result carries `checkoutUrl` (the hosted page for that payment or link). Pass `returnUrl` and, after
+paying, the page shows **Back to store** and, when it was not opened as a window, goes back by itself:
+
+```ts
+const payment = await p2flux.createPayment({ recipient, amount: '25.00', returnUrl: 'https://shop.example/order/42' })
+redirect(payment.checkoutUrl!)
+// the buyer comes back to https://shop.example/order/42?p2flux_reference=0x…&p2flux_tx=0x…&p2flux_status=paid
+```
+
+The return is a convenience, never proof: confirm with `verifyPayment` (or a webhook) before
+fulfilling. `p2flux_status=confirming` means sent, not yet deep enough - keep checking.
+
 Full walk-through: [The payment lifecycle](docs/payment-flow.md).
 
 ## Pay the network fee in USDC

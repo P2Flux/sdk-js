@@ -128,6 +128,7 @@ const linkTerms = (b) => ({
     amount: b.amount,
     amountUnits: b.amount_units,
     ...(b.label ? { label: b.label } : {}),
+    ...(b.return_url ? { returnUrl: b.return_url } : {}),
     createdAt: b.created_at,
     expiresAt: b.expires_at,
     ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode } : {}),
@@ -315,6 +316,7 @@ export function createP2Flux(options) {
                 amount: terms.amount,
                 ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
+                ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -331,6 +333,8 @@ export function createP2Flux(options) {
                     reference: pay.reference,
                 },
                 ...(body.notify_url ? { notifyUrl: body.notify_url } : {}),
+                ...(body.return_url ? { returnUrl: body.return_url } : {}),
+                ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
                 raw: body,
             };
         },
@@ -351,6 +355,7 @@ export function createP2Flux(options) {
                 ...(body.network_fee_quote === undefined
                     ? {}
                     : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
+                ...(body.return_url ? { returnUrl: body.return_url } : {}),
                 raw: body,
             };
         },
@@ -609,8 +614,9 @@ export function createP2Flux(options) {
                 ...(terms.periods === undefined ? {} : { periods: terms.periods }),
                 ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
+                ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
             });
-            return { ...linkTerms(body), link: body.link, manage: body.manage, ...(body.notify_url ? { notifyUrl: body.notify_url } : {}), raw: body };
+            return { ...linkTerms(body), link: body.link, manage: body.manage, ...(body.notify_url ? { notifyUrl: body.notify_url } : {}), ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}), raw: body };
         },
         /**
          * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token

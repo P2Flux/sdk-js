@@ -342,6 +342,22 @@ test('createPayment sends notify_url only when given', async () => {
   assert.equal((calls[1]!.body as { notify_url: string }).notify_url, 'https://shop.example.com/n')
 })
 
+test('return_url goes out only when given; return and checkout URLs come back', async () => {
+  const back = 'https://shop.example.com/order/1'
+  const page = 'https://pay-test.p2flux.com/#/pay/p2i1.x'
+  const { impl, calls } = answering(200, { intent: 'p2i1.x', reference: REF, amount: '10.00', expires_at: 1, pay: {}, return_url: back, checkout_url: page, link: 'p2l1.x', manage: 'p2lm1.x', kind: 'once' })
+  const plain = await client(impl).createPayment({ recipient: '0x1', amount: '10.00' })
+  assert.equal('return_url' in (calls[0]!.body as object), false)
+  assert.equal(plain.returnUrl, back)
+  assert.equal(plain.checkoutUrl, page)
+  await client(impl).createPayment({ recipient: '0x1', amount: '10.00', returnUrl: back })
+  assert.equal((calls[1]!.body as { return_url: string }).return_url, back)
+  const link = await client(impl).createPaymentLink({ kind: 'once', recipient: '0x1', amount: '10.00', returnUrl: back })
+  assert.equal((calls[2]!.body as { return_url: string }).return_url, back)
+  assert.equal(link.returnUrl, back)
+  assert.equal(link.checkoutUrl, page)
+})
+
 test('handleNotification confirms a payment.paid only through verify, for your reference', async () => {
   const { impl, calls } = routed({ '/v1/payments/verify': { valid: true, tx_hash: TXH, reference: REF, amount: '10.00' } })
   const ok = await client(impl).handleNotification(JSON.stringify(paidEvent), { reference: REF })
