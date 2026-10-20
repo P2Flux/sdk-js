@@ -7,8 +7,7 @@
 - **Redirect checkout.** `returnUrl` on `createPayment()` and `createPaymentLink()`: after paying, the
   hosted checkout sends the buyer back with `p2flux_reference`, `p2flux_tx` and `p2flux_status` in
   the query. Every create result now carries `checkoutUrl`, the hosted page to send the buyer to.
-  `resolvePayment()` and link terms report `returnUrl`. Both need the P2Flux API from [date]; older
-  APIs simply leave them out. (https://p2flux.com/docs/payments.html#return)
+  `resolvePayment()` and link terms report `returnUrl`. An older API leaves both out. (https://p2flux.com/docs/payments.html#return)
 
 ## 0.12.0 - 2026-10-15
 

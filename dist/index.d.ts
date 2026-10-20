@@ -264,7 +264,10 @@ export type PaymentIntent = {
     notifyUrl?: string;
     /** Present when the payment was created with `returnUrl`. */
     returnUrl?: string;
-    /** P2Flux's hosted payment page for this payment: send the buyer here. Absent from older APIs. */
+    /**
+     * P2Flux's hosted payment page for this payment (pay.p2flux.com): send the buyer here. Absent from
+     * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
+     */
     checkoutUrl?: string;
     raw: Record<string, unknown>;
 };
@@ -527,7 +530,7 @@ export type PaymentLink = PaymentLinkTermsView & {
     manage: string;
     /** Present when the link was created with `notifyUrl`. */
     notifyUrl?: string;
-    /** P2Flux's hosted payment page for this link. Absent from older APIs. */
+    /** P2Flux's hosted payment page for this link. Absent from older APIs; self-hosted: `checkoutLink()`. */
     checkoutUrl?: string;
     raw: Record<string, unknown>;
 };

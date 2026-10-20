@@ -616,7 +616,14 @@ export function createP2Flux(options) {
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
             });
-            return { ...linkTerms(body), link: body.link, manage: body.manage, ...(body.notify_url ? { notifyUrl: body.notify_url } : {}), ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}), raw: body };
+            return {
+                ...linkTerms(body),
+                link: body.link,
+                manage: body.manage,
+                ...(body.notify_url ? { notifyUrl: body.notify_url } : {}),
+                ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
+                raw: body,
+            };
         },
         /**
          * What a buyer's checkout does with a link: an intent (one-time kinds) or a setup token

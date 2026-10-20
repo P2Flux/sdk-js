@@ -396,7 +396,10 @@ export type PaymentIntent = {
   notifyUrl?: string
   /** Present when the payment was created with `returnUrl`. */
   returnUrl?: string
-  /** P2Flux's hosted payment page for this payment: send the buyer here. Absent from older APIs. */
+  /**
+   * P2Flux's hosted payment page for this payment (pay.p2flux.com): send the buyer here. Absent from
+   * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
+   */
   checkoutUrl?: string
   raw: Record<string, unknown>
 }
@@ -765,7 +768,7 @@ export type PaymentLink = PaymentLinkTermsView & {
   manage: string
   /** Present when the link was created with `notifyUrl`. */
   notifyUrl?: string
-  /** P2Flux's hosted payment page for this link. Absent from older APIs. */
+  /** P2Flux's hosted payment page for this link. Absent from older APIs; self-hosted: `checkoutLink()`. */
   checkoutUrl?: string
   raw: Record<string, unknown>
 }
@@ -1399,7 +1402,14 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
       })
-      return { ...linkTerms(body), link: body.link as string, manage: body.manage as string, ...(body.notify_url ? { notifyUrl: body.notify_url as string } : {}), ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}), raw: body }
+      return {
+        ...linkTerms(body),
+        link: body.link as string,
+        manage: body.manage as string,
+        ...(body.notify_url ? { notifyUrl: body.notify_url as string } : {}),
+        ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}),
+        raw: body,
+      }
     },
 
     /**
