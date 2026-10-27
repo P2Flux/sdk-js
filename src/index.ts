@@ -755,7 +755,7 @@ export type PaymentLinkTerms = {
   notifyUrl?: string
   /** Optional: where the hosted checkout sends the buyer after paying, as for a payment (subscriptions: `p2flux_subscription` instead of `p2flux_reference`). */
   returnUrl?: string
-  /** One-time kinds, Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
+  /** `once` and `reusable` links (not subscriptions), Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
   privatePayment?: 'hinkal'
 }
 
@@ -773,7 +773,7 @@ export type PaymentLinkTermsView = {
   expiresAt: number
   /** One-time kinds. */
   gasPaymentMode?: GasPaymentMode
-  /** One-time kinds that offer "Pay privately with Hinkal". */
+  /** `once` / `reusable` links that offer "Pay privately with Hinkal". */
   privatePayment?: 'hinkal'
   /** Subscriptions. */
   period?: number

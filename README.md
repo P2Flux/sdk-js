@@ -130,7 +130,7 @@ Full walk-through: [The payment lifecycle](docs/payment-flow.md).
 
 ### Private payments with Hinkal: `privatePayment`
 
-On Base, a payment or one-time link can also offer **"Pay privately with Hinkal"**: the buyer pays
+On Base, a payment or a `once` / `reusable` link (not a subscription) can also offer **"Pay privately with Hinkal"**: the buyer pays
 from their Hinkal private balance and their own wallet does not appear on chain. You receive the same
 amount, minus the same fee; the buyer pays Hinkal's fee on top. Native gas only.
 

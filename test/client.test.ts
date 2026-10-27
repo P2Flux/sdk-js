@@ -371,6 +371,23 @@ test('private_payment goes out only when given and comes back on the payment, re
   assert.equal(link.privatePayment, 'hinkal')
 })
 
+test('link status reads private_payment and, per payment, refundable and screening', async () => {
+  const { impl } = answering(200, {
+    kind: 'reusable', id: 'l1', chain_id: 8453, recipient: '0x1', amount: '5.00', amount_units: '5000000', created_at: 1, expires_at: 2,
+    gas_payment_mode: 'native', private_payment: 'hinkal', state: 'open',
+    payments: [
+      { tx_hash: TXH, block_number: '1', reference: REF, amount_units: '5000000', payer: '0xf66d', refundable: false, screening: 'unknown' },
+      { tx_hash: TXH, block_number: '2', reference: REF, amount_units: '5000000', payer: '0xb0b' },
+    ],
+  })
+  const status = await client(impl).paymentLinkStatus({ manage: 'p2lm1.x' })
+  assert.equal(status.privatePayment, 'hinkal')
+  assert.equal(status.payments![0]!.refundable, false)
+  assert.equal(status.payments![0]!.screening, 'unknown')
+  assert.equal('refundable' in status.payments![1]!, false)
+  assert.equal('screening' in status.payments![1]!, false)
+})
+
 test('a privacy-service payment reports refundable false; a normal one leaves it absent', async () => {
   const accounting = { payment_units: '1', payment_fee_units: '0', network_fee_units: '0', fixed_network_fee_units: '0', merchant_net_units: '1', buyer_total_units: '1' }
   const hidden = answering(200, { valid: true, tx_hash: TXH, reference: REF, amount: '10.00', screening: 'unknown', accounting: { ...accounting, payer: '0xf66d', refundable: false } })
