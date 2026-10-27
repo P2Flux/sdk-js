@@ -209,6 +209,12 @@ export type PaymentTerms = {
      * `confirming`) in the query. A convenience, never proof: confirm with `verifyPayment` or a webhook.
      */
     returnUrl?: string;
+    /**
+     * Optional, Base only: also offer the buyer "Pay privately with Hinkal" on the hosted checkout (paid
+     * from the buyer's Hinkal private balance). Settlement and fees to you are unchanged; such a payment
+     * cannot be refunded automatically (`refundable: false`). Native gas only.
+     */
+    privatePayment?: 'hinkal';
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -242,6 +248,12 @@ export type PaymentAccounting = {
     merchantNetUnits: string;
     buyerTotalUnits: string;
     payer?: string;
+    /**
+     * `false` when the payment came through a privacy service (e.g. Hinkal): on chain the payer is that
+     * service's contract, so P2Flux will not prepare a refund - return it to an address the buyer gives
+     * you. Absent means refundable as usual (and on older API builds).
+     */
+    refundable?: false;
 };
 export type PaymentIntent = {
     /** Signed capability for this exact payment. Put it in the checkout link fragment: `#/pay/<intent>`. */
@@ -264,6 +276,8 @@ export type PaymentIntent = {
     notifyUrl?: string;
     /** Present when the payment was created with `returnUrl`. */
     returnUrl?: string;
+    /** Present when the payment offers "Pay privately with Hinkal". */
+    privatePayment?: 'hinkal';
     /**
      * P2Flux's hosted payment page for this payment (pay.p2flux.com): send the buyer here. Absent from
      * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
@@ -288,6 +302,8 @@ export type ResolvedPayment = {
     networkFeeQuote?: NetworkFeeQuote;
     /** Present when the payment carries a return URL. */
     returnUrl?: string;
+    /** Present when the payment offers "Pay privately with Hinkal". */
+    privatePayment?: 'hinkal';
     raw: Record<string, unknown>;
 };
 /** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
@@ -503,6 +519,8 @@ export type PaymentLinkTerms = {
     notifyUrl?: string;
     /** Optional: where the hosted checkout sends the buyer after paying, as for a payment (subscriptions: `p2flux_subscription` instead of `p2flux_reference`). */
     returnUrl?: string;
+    /** One-time kinds, Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
+    privatePayment?: 'hinkal';
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -518,6 +536,8 @@ export type PaymentLinkTermsView = {
     expiresAt: number;
     /** One-time kinds. */
     gasPaymentMode?: GasPaymentMode;
+    /** One-time kinds that offer "Pay privately with Hinkal". */
+    privatePayment?: 'hinkal';
     /** Subscriptions. */
     period?: number;
     periods?: number;
@@ -560,6 +580,10 @@ export type PaymentLinkPayment = {
     amountUnits: string;
     payer?: string;
     timestamp?: number;
+    /** Manage view: `false` when paid through a privacy service (not refundable to `payer`). */
+    refundable?: false;
+    /** Manage view: `sanctioned`, or `unknown` for a privacy-service payment (not screened). */
+    screening?: 'sanctioned' | 'unknown';
 };
 export type PaymentLinkSubscriber = {
     subscriptionId: string;

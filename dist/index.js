@@ -132,6 +132,7 @@ const linkTerms = (b) => ({
     createdAt: b.created_at,
     expiresAt: b.expires_at,
     ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode } : {}),
+    ...(b.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
     ...(b.period ? { period: b.period } : {}),
     ...(b.periods ? { periods: b.periods } : {}),
     ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days } : {}),
@@ -143,6 +144,8 @@ const linkPayment = (p) => ({
     amountUnits: p.amount_units,
     ...(p.payer ? { payer: p.payer } : {}),
     ...(p.timestamp ? { timestamp: p.timestamp } : {}),
+    ...(p.refundable === false ? { refundable: false } : {}),
+    ...(p.screening === 'sanctioned' || p.screening === 'unknown' ? { screening: p.screening } : {}),
 });
 const HOSTED_CHECKOUT = {
     'api.p2flux.com': 'https://pay.p2flux.com',
@@ -198,6 +201,7 @@ const paymentAccounting = (raw) => ({
     merchantNetUnits: raw.merchant_net_units,
     buyerTotalUnits: raw.buyer_total_units,
     ...(raw.payer === undefined ? {} : { payer: raw.payer }),
+    ...(raw.refundable === false ? { refundable: false } : {}),
 });
 /** The wire shape of a quote, in the SDK's camelCase. */
 const networkFeeQuote = (raw) => ({
@@ -317,6 +321,7 @@ export function createP2Flux(options) {
                 ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+                ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -334,6 +339,7 @@ export function createP2Flux(options) {
                 },
                 ...(body.notify_url ? { notifyUrl: body.notify_url } : {}),
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
+                ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
                 ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
                 raw: body,
             };
@@ -356,6 +362,7 @@ export function createP2Flux(options) {
                     ? {}
                     : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
+                ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
                 raw: body,
             };
         },
@@ -615,6 +622,7 @@ export function createP2Flux(options) {
                 ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+                ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
             });
             return {
                 ...linkTerms(body),

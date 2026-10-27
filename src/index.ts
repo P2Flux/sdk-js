@@ -338,6 +338,12 @@ export type PaymentTerms = {
    * `confirming`) in the query. A convenience, never proof: confirm with `verifyPayment` or a webhook.
    */
   returnUrl?: string
+  /**
+   * Optional, Base only: also offer the buyer "Pay privately with Hinkal" on the hosted checkout (paid
+   * from the buyer's Hinkal private balance). Settlement and fees to you are unchanged; such a payment
+   * cannot be refunded automatically (`refundable: false`). Native gas only.
+   */
+  privatePayment?: 'hinkal'
 }
 
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
@@ -373,6 +379,12 @@ export type PaymentAccounting = {
   merchantNetUnits: string
   buyerTotalUnits: string
   payer?: string
+  /**
+   * `false` when the payment came through a privacy service (e.g. Hinkal): on chain the payer is that
+   * service's contract, so P2Flux will not prepare a refund - return it to an address the buyer gives
+   * you. Absent means refundable as usual (and on older API builds).
+   */
+  refundable?: false
 }
 
 export type PaymentIntent = {
@@ -396,6 +408,8 @@ export type PaymentIntent = {
   notifyUrl?: string
   /** Present when the payment was created with `returnUrl`. */
   returnUrl?: string
+  /** Present when the payment offers "Pay privately with Hinkal". */
+  privatePayment?: 'hinkal'
   /**
    * P2Flux's hosted payment page for this payment (pay.p2flux.com): send the buyer here. Absent from
    * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
@@ -421,6 +435,8 @@ export type ResolvedPayment = {
   networkFeeQuote?: NetworkFeeQuote
   /** Present when the payment carries a return URL. */
   returnUrl?: string
+  /** Present when the payment offers "Pay privately with Hinkal". */
+  privatePayment?: 'hinkal'
   raw: Record<string, unknown>
 }
 
@@ -739,6 +755,8 @@ export type PaymentLinkTerms = {
   notifyUrl?: string
   /** Optional: where the hosted checkout sends the buyer after paying, as for a payment (subscriptions: `p2flux_subscription` instead of `p2flux_reference`). */
   returnUrl?: string
+  /** One-time kinds, Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
+  privatePayment?: 'hinkal'
 }
 
 /** A link's terms, as the API states them. */
@@ -755,6 +773,8 @@ export type PaymentLinkTermsView = {
   expiresAt: number
   /** One-time kinds. */
   gasPaymentMode?: GasPaymentMode
+  /** One-time kinds that offer "Pay privately with Hinkal". */
+  privatePayment?: 'hinkal'
   /** Subscriptions. */
   period?: number
   periods?: number
@@ -793,7 +813,18 @@ export type NotificationResult = {
   subscriber?: PaymentLinkSubscriber
 }
 
-export type PaymentLinkPayment = { txHash: string; blockNumber: string; reference: string; amountUnits: string; payer?: string; timestamp?: number }
+export type PaymentLinkPayment = {
+  txHash: string
+  blockNumber: string
+  reference: string
+  amountUnits: string
+  payer?: string
+  timestamp?: number
+  /** Manage view: `false` when paid through a privacy service (not refundable to `payer`). */
+  refundable?: false
+  /** Manage view: `sanctioned`, or `unknown` for a privacy-service payment (not screened). */
+  screening?: 'sanctioned' | 'unknown'
+}
 
 export type PaymentLinkSubscriber = {
   subscriptionId: string
@@ -842,6 +873,7 @@ const linkTerms = (b: Record<string, unknown>): PaymentLinkTermsView => ({
   createdAt: b.created_at as number,
   expiresAt: b.expires_at as number,
   ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode as GasPaymentMode } : {}),
+  ...(b.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
   ...(b.period ? { period: b.period as number } : {}),
   ...(b.periods ? { periods: b.periods as number } : {}),
   ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days as number } : {}),
@@ -854,6 +886,8 @@ const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
   amountUnits: p.amount_units as string,
   ...(p.payer ? { payer: p.payer as string } : {}),
   ...(p.timestamp ? { timestamp: p.timestamp as number } : {}),
+  ...(p.refundable === false ? { refundable: false as const } : {}),
+  ...(p.screening === 'sanctioned' || p.screening === 'unknown' ? { screening: p.screening as 'sanctioned' | 'unknown' } : {}),
 })
 
 export type P2FluxOptions = {
@@ -945,6 +979,7 @@ const paymentAccounting = (raw: Record<string, unknown>): PaymentAccounting => (
   merchantNetUnits: raw.merchant_net_units as string,
   buyerTotalUnits: raw.buyer_total_units as string,
   ...(raw.payer === undefined ? {} : { payer: raw.payer as string }),
+  ...(raw.refundable === false ? { refundable: false as const } : {}),
 })
 
 /** The wire shape of a quote, in the SDK's camelCase. */
@@ -1068,6 +1103,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+        ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
       })
       const pay = (body.pay ?? {}) as Record<string, unknown>
       return {
@@ -1085,6 +1121,7 @@ export function createP2Flux(options: P2FluxOptions) {
         },
         ...(body.notify_url ? { notifyUrl: body.notify_url as string } : {}),
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
+        ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
         ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}),
         raw: body,
       }
@@ -1108,6 +1145,7 @@ export function createP2Flux(options: P2FluxOptions) {
           ? {}
           : { networkFeeQuote: networkFeeQuote(body.network_fee_quote as Record<string, unknown>) }),
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
+        ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
         raw: body,
       }
     },
@@ -1401,6 +1439,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.suspendAfterDays === undefined ? {} : { suspend_after_days: terms.suspendAfterDays }),
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+        ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
       })
       return {
         ...linkTerms(body),

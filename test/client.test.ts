@@ -358,6 +358,30 @@ test('return_url goes out only when given; return and checkout URLs come back', 
   assert.equal(link.checkoutUrl, page)
 })
 
+test('private_payment goes out only when given and comes back on the payment, resolve and link', async () => {
+  const { impl, calls } = answering(200, { intent: 'p2i1.x', reference: REF, amount: '10.00', expires_at: 1, pay: {}, private_payment: 'hinkal', link: 'p2l1.x', manage: 'p2lm1.x', kind: 'once', gas_payment_mode: 'native' })
+  await client(impl).createPayment({ recipient: '0x1', amount: '10.00' })
+  assert.equal('private_payment' in (calls[0]!.body as object), false)
+  const paid = await client(impl).createPayment({ recipient: '0x1', amount: '10.00', privatePayment: 'hinkal' })
+  assert.equal((calls[1]!.body as { private_payment: string }).private_payment, 'hinkal')
+  assert.equal(paid.privatePayment, 'hinkal')
+  assert.equal((await client(impl).resolvePayment('p2i1.x')).privatePayment, 'hinkal')
+  const link = await client(impl).createPaymentLink({ kind: 'once', recipient: '0x1', amount: '10.00', privatePayment: 'hinkal' })
+  assert.equal((calls[3]!.body as { private_payment: string }).private_payment, 'hinkal')
+  assert.equal(link.privatePayment, 'hinkal')
+})
+
+test('a privacy-service payment reports refundable false; a normal one leaves it absent', async () => {
+  const accounting = { payment_units: '1', payment_fee_units: '0', network_fee_units: '0', fixed_network_fee_units: '0', merchant_net_units: '1', buyer_total_units: '1' }
+  const hidden = answering(200, { valid: true, tx_hash: TXH, reference: REF, amount: '10.00', screening: 'unknown', accounting: { ...accounting, payer: '0xf66d', refundable: false } })
+  const v = await client(hidden.impl).verifyPayment('p2i1.x', TXH)
+  assert.equal(v.valid && v.accounting?.refundable, false)
+  assert.equal(v.valid && v.screening, 'unknown')
+  const plain = answering(200, { valid: true, tx_hash: TXH, reference: REF, amount: '10.00', accounting: { ...accounting, payer: '0xb0b' } })
+  const w = await client(plain.impl).verifyPayment('p2i1.x', TXH)
+  assert.equal(w.valid && 'refundable' in (w.accounting ?? {}), false)
+})
+
 test('handleNotification confirms a payment.paid only through verify, for your reference', async () => {
   const { impl, calls } = routed({ '/v1/payments/verify': { valid: true, tx_hash: TXH, reference: REF, amount: '10.00' } })
   const ok = await client(impl).handleNotification(JSON.stringify(paidEvent), { reference: REF })
