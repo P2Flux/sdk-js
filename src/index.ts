@@ -2181,7 +2181,10 @@ export function createP2Flux(options: P2FluxOptions) {
      *
      * Optional `expect.signature`: the `p2flux-signature` header. Given, the raw body (a string) is
      * checked first (`verifyWebhook`, with `keys` / `toleranceSec` as there) and a bad or stale one
-     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
+     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD: answer those
+     * with a 4xx/5xx, never a 2xx, so the event is sent again and shows in the delivery history.
+     * `signature` undefined or null (no header: an API before the signing release) checks the event
+     * unsigned - accepted only because the API's verdict decides, never the event body.
      */
     async handleNotification(
       notification: string | Record<string, unknown>,
@@ -2191,7 +2194,7 @@ export function createP2Flux(options: P2FluxOptions) {
       // A malformed id would match too much ("0x" is a prefix of every reference).
       if (expect.reference && !/^0x[0-9a-fA-F]{64}$/.test(expect.reference)) throw new TypeError('expect.reference must be the 32-byte reference from createPayment')
       if (expect.linkId && !/^0x[0-9a-fA-F]{32}$/.test(expect.linkId)) throw new TypeError('expect.linkId must be the 16-byte link id')
-      if (expect.signature !== undefined) {
+      if (expect.signature != null) {
         if (typeof notification !== 'string') throw new TypeError('expect.signature needs the raw body as a string')
         try {
           await client.verifyWebhook(notification, expect.signature, expect)

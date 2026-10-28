@@ -121,6 +121,11 @@ const event = await p2flux.verifyWebhook(rawBody, req.headers['p2flux-signature'
 
 A signature proves P2Flux sent it, not that money moved: `handleNotification` still asks the API.
 
+Answer 4xx/5xx when the reason starts with `WEBHOOK_` (`WEBHOOK_SIGNATURE_INVALID`, `WEBHOOK_TOO_OLD`),
+never 2xx: the event then stays pending, is sent again and shows in the delivery history. A request
+without the header (an API before the release that signs, 2026-11) leaves `signature` undefined or null and
+is checked unsigned - accepted only because the API's verdict (`verifyPayment`) decides, never the body.
+
 **Delivery history.** `webhookDeliveries({ intent })` (or `{ manage }` for a link) lists each event with
 every attempt's time, HTTP status (0 = no answer) and duration, kept 7 days; `redeliverWebhook(token,
 eventId)` sends a pending one now (at most 3 times per event per hour).

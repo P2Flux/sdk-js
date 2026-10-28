@@ -122,3 +122,10 @@ test('verifyWebhook: a failed refetch (unknown kid, API down) keeps the keys alr
   assert.ok(await p2flux.verifyWebhook(BODY, HEADER, { now: T }), 'the known key still verifies, without asking the API')
   assert.equal(calls, 2)
 })
+
+test('handleNotification: signature null is treated as absent (no header), like the PHP SDK', async () => {
+  const REF = `0x${'12'.repeat(32)}`
+  const event = JSON.stringify({ id: 'evt_2', type: 'payment.paid', data: { reference: REF, intent: 'p2f1.k.e30.s', tx_hash: `0x${'ab'.repeat(32)}` } })
+  const r = await offline.handleNotification(event, { reference: REF, signature: null as never })
+  assert.equal(r.reason, 'NOT_YOUR_ORDER')
+})
