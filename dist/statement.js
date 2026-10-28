@@ -16,6 +16,11 @@
  *
  * `merchant_ref` is filled from the intents you pass (`intents`): they are decoded here, never sent
  * anywhere. Empty when unknown.
+ *
+ * `currencies: ['EUR', 'GBP']` adds the value of `net` in USD (USDC booked 1:1), EUR and GBP, rounded to
+ * cents, at the ECB euro reference rate of the row's day (UTC) - `rate_date` is the ECB publication day
+ * used (the last one before a weekend or holiday). The rates come from the P2Flux API's /v1/rates
+ * (`apiUrl`): public data, and only the dates are sent.
  */
 /**
  * Addresses and deploy blocks (the floor of every log search), as pinned in the P2Flux checkout and
@@ -179,6 +184,9 @@ export async function statementOn(net, options) {
     if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs > toTs)
         throw new TypeError('from must be a time before to');
     const lookbackDays = options.lookbackDays ?? 90;
+    const currencies = options.currencies ?? [];
+    if (!Array.isArray(currencies) || currencies.some((c) => c !== 'EUR' && c !== 'GBP'))
+        throw new TypeError("currencies may name 'EUR' and 'GBP'");
     if (!Number.isInteger(lookbackDays) || lookbackDays < 0)
         throw new TypeError('lookbackDays must be a whole number of days, 0 or more');
     const rpc = rpcOver(options.rpcUrls, options.fetch ?? globalThis.fetch);
@@ -259,21 +267,68 @@ export async function statementOn(net, options) {
     const blocks = [...new Set(inWindow.map((e) => e.block))];
     const times = (await rpc(blocks.map((n) => ['eth_getBlockByNumber', [hexNum(n), false]])));
     const tsByBlock = new Map(blocks.map((n, i) => [n, parseInt(times[i].timestamp, 16)]));
-    return inWindow
+    const rows = inWindow
         .filter((e) => {
         const ts = tsByBlock.get(e.block);
         return ts >= fromTs && ts <= toTs;
     })
         .sort((x, y) => x.block - y.block || x.index - y.index)
         .map((e) => ({ date: new Date(tsByBlock.get(e.block) * 1000).toISOString(), ...e.row }));
+    return currencies.length ? withValues(rows, currencies, options.apiUrl ?? 'https://api.p2flux.com', options.fetch ?? globalThis.fetch) : rows;
 }
+/** `units * num / den`, rounded half away from zero (same integers and rounding as the PHP SDK). */
+const roundDiv = (n, d) => {
+    const q = ((n < 0n ? -n : n) * 2n + d) / (2n * d);
+    return n < 0n ? -q : q;
+};
+const cents = (c) => {
+    const a = (c < 0n ? -c : c).toString().padStart(3, '0');
+    return `${c < 0n ? '-' : ''}${a.slice(0, -2)}.${a.slice(-2)}`;
+};
+/** A rate as published (at most 5 decimals) in 1e-5 units. */
+const rate5 = (r) => {
+    if (typeof r !== 'number' || !(r > 0))
+        throw new Error('P2Flux /v1/rates: not a rate');
+    return BigInt(Math.round(r * 1e5));
+};
+/** The rows with value_usd/eur/gbp and rate_date, rates from the API in chunks of at most 366 days. */
+const withValues = async (rows, currencies, apiUrl, fetchImpl) => {
+    if (!rows.length)
+        return rows;
+    const days = {};
+    const first = Date.parse(rows[0].date.slice(0, 10));
+    const last = Date.parse(rows.at(-1).date.slice(0, 10));
+    for (let a = first; a <= last; a += 366 * 86_400_000) {
+        const range = { from: new Date(a).toISOString().slice(0, 10), to: new Date(Math.min(last, a + 365 * 86_400_000)).toISOString().slice(0, 10) };
+        const res = await fetchImpl(`${apiUrl.replace(/\/$/, '')}/v1/rates`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(range) });
+        const body = (await res.json().catch(() => ({})));
+        if (!res.ok || !body.rates)
+            throw new Error(`P2Flux /v1/rates: ${body.error ?? `HTTP ${res.status}`}`);
+        Object.assign(days, body.rates);
+    }
+    return rows.map((r) => {
+        const day = days[r.date.slice(0, 10)];
+        if (!day)
+            throw new Error(`no ECB rate for ${r.date.slice(0, 10)}`);
+        const usd = rate5(day.USD);
+        const units = BigInt(r.net.replace('.', ''));
+        return {
+            ...r,
+            value_usd: cents(roundDiv(units, 10000n)),
+            ...(currencies.includes('EUR') ? { value_eur: cents(roundDiv(units * 100000n, usd * 10000n)) } : {}),
+            ...(currencies.includes('GBP') ? { value_gbp: cents(roundDiv(units * rate5(day.GBP), usd * 10000n)) } : {}),
+            rate_date: day.rate_date,
+        };
+    });
+};
 /** A CSV cell: quoted when needed; a text cell that a spreadsheet would run as a formula gets a leading '. */
 const cell = (value, text = true) => {
     const v = text && /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
     return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 };
 const COLUMNS = ['date', 'tx_hash', 'kind', 'payer', 'reference', 'merchant_ref', 'gross', 'p2flux_fee', 'network_fee', 'net'];
-const AMOUNTS = new Set(['gross', 'p2flux_fee', 'network_fee', 'net']);
+const VALUE_COLUMNS = ['value_usd', 'value_eur', 'value_gbp', 'rate_date'];
+const AMOUNTS = new Set(['gross', 'p2flux_fee', 'network_fee', 'net', 'value_usd', 'value_eur', 'value_gbp']);
 /**
  * The rows as CSV (CRLF line ends).
  *
@@ -282,16 +337,20 @@ const AMOUNTS = new Set(['gross', 'p2flux_fee', 'network_fee', 'net']);
  *   (merchant_ref, else the on-chain reference).
  * - `quickbooks`: the 3-column bank upload - Date (mm/dd/yyyy), Description, Amount (net).
  *
- * The amount booked is `net`, what reached the wallet; gross and fees are in the description.
+ * The amount booked is `net`, what reached the wallet; gross and fees are in the description. Rows
+ * with `currencies` values: generic adds the value columns; xero and quickbooks keep their layout (amount
+ * in USD) and name the EUR/GBP values and the ECB day in the description.
  */
 export function toCsv(rows, format = 'generic') {
     const day = (r) => r.date.slice(8, 10);
     const month = (r) => r.date.slice(5, 7);
     const year = (r) => r.date.slice(0, 4);
-    const describe = (r) => `${r.tx_hash}: gross ${r.gross}, P2Flux fee ${r.p2flux_fee}, network fee ${r.network_fee}`;
+    const fx = (r) => r.rate_date ? `${r.value_eur ? `, EUR ${r.value_eur}` : ''}${r.value_gbp ? `, GBP ${r.value_gbp}` : ''} (ECB ${r.rate_date})` : '';
+    const describe = (r) => `${r.tx_hash}: gross ${r.gross}, P2Flux fee ${r.p2flux_fee}, network fee ${r.network_fee}${fx(r)}`;
     let lines;
     if (format === 'generic') {
-        lines = [COLUMNS.join(','), ...rows.map((r) => COLUMNS.map((c) => cell(r[c], !AMOUNTS.has(c))).join(','))];
+        const columns = [...COLUMNS, ...VALUE_COLUMNS.filter((c) => rows[0]?.[c] !== undefined)];
+        lines = [columns.join(','), ...rows.map((r) => columns.map((c) => cell(r[c] ?? '', !AMOUNTS.has(c))).join(','))];
     }
     else if (format === 'xero') {
         lines = [

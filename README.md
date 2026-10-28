@@ -155,6 +155,12 @@ before `from`: a September payment refunded in October shows on the October stat
 only. `statementOn(contracts, { wallet, from, to, rpcUrls })` is the same over contracts and
 endpoints you name, without the built-in network table (for a bundle that must carry one network).
 
+`currencies: ['EUR', 'GBP']` adds `value_usd` (USDC booked as USD 1:1), `value_eur`, `value_gbp` (the
+row's `net`, 2 decimals) and `rate_date` at the ECB euro reference rate of the row's day (a weekend or
+holiday takes the last published day). The rates come from the API's `/v1/rates` (`apiUrl`, default
+production; only dates are sent) - also as `p2flux.rates({ from, to })`. The generic CSV gets the extra
+columns; Xero and QuickBooks keep their layout (amount in USD) and name EUR/GBP in the description.
+
 ### Redirect checkout: `returnUrl` and `checkoutUrl`
 
 Prefer sending the buyer to P2Flux's page and getting them back over opening a window? Every create

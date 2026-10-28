@@ -5,7 +5,9 @@
  * ranges over 5,000 blocks, so the halving path runs), and receipts for native payments.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { createP2Flux } from '../src/index.js'
 import { NETWORKS, statement, statementOn, toCsv, TOPICS, type StatementRow } from '../src/statement.js'
 import { keccak256 } from '../src/keccak.js'
 
@@ -266,4 +268,75 @@ test('toCsv: generic, xero and quickbooks', () => {
     ].join('\r\n') + '\r\n',
   )
   assert.throws(() => toCsv(ROWS, 'excel' as never), TypeError)
+})
+
+// --- currencies: USD 1:1, EUR and GBP at the ECB rate of the row's day, from the API's /v1/rates -----
+
+/** The API's /v1/rates for the asked range: every day 1.0799 USD and 0.83728 GBP per EUR. */
+const withRates = (rpc: typeof fetch) => {
+  const asked: { from: string; to: string }[] = []
+  const impl = (async (url: string, init: { body: string }) => {
+    if (!String(url).endsWith('/v1/rates')) return rpc(url, init as never)
+    const range = JSON.parse(init.body) as { from: string; to: string }
+    asked.push(range)
+    const rates: Record<string, unknown> = {}
+    for (let d = Date.parse(range.from); d <= Date.parse(range.to); d += 86_400_000) {
+      const day = new Date(d).toISOString().slice(0, 10)
+      rates[day] = { USD: 1.0799, GBP: 0.83728, rate_date: day }
+    }
+    return { ok: true, status: 200, json: async () => ({ source: 'ECB', base: 'EUR', fetched_at: 1, rates }) } as never
+  }) as unknown as typeof fetch
+  return { impl, asked }
+}
+
+/** Identical copy in sdk-php tests/fixtures: both SDKs must produce these bytes. */
+const FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/statement-currencies.json', import.meta.url), 'utf8')) as Record<'generic' | 'xero' | 'quickbooks', string>
+
+test('statement currencies: value_usd (1:1), value_eur, value_gbp of net at the day\'s ECB rate, rate_date; one rates call', async () => {
+  const stub = withRates(rpcStub().impl)
+  const rows = await run({ currencies: ['EUR', 'GBP'], apiUrl: 'https://api.p2flux.example', fetch: stub.impl, intents: [intent({ v: 1, reference: REF1, mr: 'INV-1042' })] })
+  assert.equal(stub.asked.length, 1)
+  assert.deepEqual(stub.asked[0], { from: rows[0]!.date.slice(0, 10), to: rows.at(-1)!.date.slice(0, 10) })
+  // 9.9 / 1.0799 = 9.1675...; * 0.83728 = 7.6757...; the refund -1 -> -0.93 EUR, -0.78 GBP.
+  assert.deepEqual(
+    rows.map((r) => [r.net, r.value_usd, r.value_eur, r.value_gbp, r.rate_date === r.date.slice(0, 10)]),
+    [
+      ['9.900000', '9.90', '9.17', '7.68', true],
+      ['12.275000', '12.28', '11.37', '9.52', true],
+      ['4.900000', '4.90', '4.54', '3.80', true],
+      ['-1.000000', '-1.00', '-0.93', '-0.78', true],
+    ],
+  )
+  assert.equal(toCsv(rows), FIXTURE.generic)
+  assert.equal(toCsv(rows, 'xero'), FIXTURE.xero)
+  assert.equal(toCsv(rows, 'quickbooks'), FIXTURE.quickbooks)
+
+  const gbpOnly = await run({ currencies: ['GBP'], fetch: withRates(rpcStub().impl).impl })
+  assert.deepEqual(Object.keys(gbpOnly[0]!).slice(-4), ['net', 'value_usd', 'value_gbp', 'rate_date'])
+  assert.equal(toCsv(gbpOnly).split('\r\n')[0], 'date,tx_hash,kind,payer,reference,merchant_ref,gross,p2flux_fee,network_fee,net,value_usd,value_gbp,rate_date')
+})
+
+test('statement currencies: none asked = no rates call and no new columns; a day without a rate or a bad currency is an error', async () => {
+  const stub = withRates(rpcStub().impl)
+  const rows = await run({ fetch: stub.impl })
+  assert.equal(stub.asked.length, 0)
+  assert.equal('value_usd' in rows[0]!, false)
+  const noRates = (async (url: string, init: never) =>
+    String(url).endsWith('/v1/rates') ? ({ ok: true, status: 200, json: async () => ({ source: 'ECB', base: 'EUR', fetched_at: 1, rates: {} }) } as never) : rpcStub().impl(url, init)) as unknown as typeof fetch
+  await assert.rejects(run({ currencies: ['EUR'], fetch: noRates }), /no ECB rate/)
+  const down = (async (url: string, init: never) =>
+    String(url).endsWith('/v1/rates') ? ({ ok: false, status: 503, json: async () => ({ error: 'RATES_UNAVAILABLE' }) } as never) : rpcStub().impl(url, init)) as unknown as typeof fetch
+  await assert.rejects(run({ currencies: ['EUR'], fetch: down }), /RATES_UNAVAILABLE/)
+  await assert.rejects(run({ currencies: ['JPY' as never] }), TypeError)
+})
+
+test('client.rates: GET-equivalent POST /v1/rates, camelCase', async () => {
+  const calls: { path: string; body: unknown }[] = []
+  const impl = (async (url: string, init: { body: string }) => {
+    calls.push({ path: new URL(String(url)).pathname, body: JSON.parse(init.body) })
+    return { status: 200, json: async () => ({ source: 'ECB', base: 'EUR', fetched_at: 7, rates: { '2026-10-24': { USD: 1.1193, GBP: 0.83728, rate_date: '2026-10-23' } } }) } as never
+  }) as unknown as typeof fetch
+  const r = await createP2Flux({ apiUrl: 'https://api.p2flux.example', fetch: impl }).rates({ from: '2026-10-24', to: '2026-10-24' })
+  assert.deepEqual(calls, [{ path: '/v1/rates', body: { from: '2026-10-24', to: '2026-10-24' } }])
+  assert.deepEqual(r, { source: 'ECB', base: 'EUR', fetchedAt: 7, rates: { '2026-10-24': { USD: 1.1193, GBP: 0.83728, rateDate: '2026-10-23' } } })
 })

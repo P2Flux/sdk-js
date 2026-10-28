@@ -19,6 +19,10 @@
   `statementOn(contracts, options)` for a bundle that carries one network only.
 - **Webhook delivery history**: `webhookDeliveries({ intent } | { manage })` and
   `redeliverWebhook(token, eventId)`.
+- **Exchange rates**: `rates({ from, to })` - ECB daily euro reference rates (USD, GBP) from `/v1/rates`.
+- **Statement currencies**: `statement({ ..., currencies: ['EUR', 'GBP'], apiUrl? })` adds `value_usd`
+  (USDC 1:1), `value_eur`, `value_gbp` and `rate_date`; generic CSV adds the columns, Xero/QuickBooks name
+  them in the description. Same bytes as the PHP SDK.
 
 All additive; needs an API with these features (an older one refuses `merchant_ref`).
 

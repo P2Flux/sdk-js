@@ -16,6 +16,11 @@
  *
  * `merchant_ref` is filled from the intents you pass (`intents`): they are decoded here, never sent
  * anywhere. Empty when unknown.
+ *
+ * `currencies: ['EUR', 'GBP']` adds the value of `net` in USD (USDC booked 1:1), EUR and GBP, rounded to
+ * cents, at the ECB euro reference rate of the row's day (UTC) - `rate_date` is the ECB publication day
+ * used (the last one before a weekend or holiday). The rates come from the P2Flux API's /v1/rates
+ * (`apiUrl`): public data, and only the dates are sent.
  */
 export type StatementNetwork = 'base' | 'base-sepolia';
 export type StatementRow = {
@@ -34,7 +39,13 @@ export type StatementRow = {
     network_fee: string;
     /** What reached the wallet. */
     net: string;
+    /** With `currencies`: `net` in USD (USDC 1:1), EUR and GBP, 2 decimals, and the ECB publication day used. */
+    value_usd?: string;
+    value_eur?: string;
+    value_gbp?: string;
+    rate_date?: string;
 };
+export type StatementCurrency = 'EUR' | 'GBP';
 type Contract = {
     address: string;
     deployBlock: number;
@@ -117,6 +128,10 @@ export type StatementOptions = {
      * payments in the window). Read only when the wallet sent USDC in the window; those payments are not rows.
      */
     lookbackDays?: number;
+    /** Add value_usd, value_eur and/or value_gbp and rate_date to each row (see the module comment). Default none. */
+    currencies?: StatementCurrency[];
+    /** Where the exchange rates come from (`currencies` only). Default 'https://api.p2flux.com'. */
+    apiUrl?: string;
     /** Injectable for tests; defaults to global fetch. */
     fetch?: typeof fetch;
 };
@@ -137,7 +152,9 @@ export declare function statementOn(net: StatementContracts, options: Omit<State
  *   (merchant_ref, else the on-chain reference).
  * - `quickbooks`: the 3-column bank upload - Date (mm/dd/yyyy), Description, Amount (net).
  *
- * The amount booked is `net`, what reached the wallet; gross and fees are in the description.
+ * The amount booked is `net`, what reached the wallet; gross and fees are in the description. Rows
+ * with `currencies` values: generic adds the value columns; xero and quickbooks keep their layout (amount
+ * in USD) and name the EUR/GBP values and the ECB day in the description.
  */
 export declare function toCsv(rows: StatementRow[], format?: 'generic' | 'xero' | 'quickbooks'): string;
 export {};
