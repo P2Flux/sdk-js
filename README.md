@@ -134,7 +134,8 @@ eventId)` sends a pending one now (at most 3 times per event per hour).
 
 Pass `merchantRef` (ASCII letters, digits and `. _ : / # -`, 1-64 characters) to `createPayment`,
 `createPaymentLink`, `createSubscription` or `charge(ref, { merchantRef })`; it comes back on verify,
-recover, link and subscription status, refunds and confirmed notifications. It is signed, not
+recover, link and subscription status, refunds and confirmed notifications. Send the same `merchantRef` when retrying a
+charge: a charge's ref is echoed from the request (stateless), so a retry with another ref echoes that one. It is signed, not
 encrypted - the buyer can read it - so never personal data. A payment's on-chain `reference` then
 commits to it, provable without P2Flux - proof the payment was created with that `merchantRef`, not who
 created it (anyone can create a payment to any wallet with any `merchantRef`). Whose order it is comes

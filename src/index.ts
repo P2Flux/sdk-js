@@ -1745,7 +1745,8 @@ export function createP2Flux(options: P2FluxOptions) {
      * timeout or a crash returns ALREADY_CHARGED instead of charging again.
      *
      * `merchantRef`: this charge's own invoice number (same rules as `PaymentTerms.merchantRef`),
-     * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref.
+     * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref. Send the same merchantRef when retrying a charge: it is echoed from the request (stateless), so a
+     * retry with another ref echoes that one.
      */
     async charge(subscriptionRef: string, options: { merchantRef?: string } = {}): Promise<ChargeResult> {
       return chargeAt('/v1/charges', {

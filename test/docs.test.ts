@@ -168,6 +168,7 @@ test('the two facts a developer must not guess are stated', () => {
   assert.ok(says('README.md', 'webhooks are optional'))
   assert.ok(says('README.md', 'answer 4xx/5xx when the reason starts with `webhook_`'))
   assert.ok(says('README.md', 'never 2xx'))
+  assert.ok(says('README.md', 'send the same `merchantref` when retrying a'))
   assert.ok(says('docs/payment-flow.md', 'webhooks are optional'))
   assert.ok(says('docs/getting-started.md', 'no api key'))
 })
