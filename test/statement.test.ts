@@ -47,6 +47,10 @@ const B2 = 46_441_000 // sponsored payment, 12.50
 const B3 = 46_442_000 // subscription charge, 5.00
 const B4 = 46_443_000 // refund 1.00 to P1 (listed)
 const B5 = 46_444_000 // transfer to a stranger (not listed), and one to P2 above its payment (not listed)
+const BS = 46_300_000 // "September": a payment by P4, before every window below (~3.4 days before B6)
+const B6 = 46_445_000 // "October": refund 5.00 to P4
+const P4 = addr('4')
+const REF3 = hash('b')
 
 const LOGS: Log[] = [
   log(net.splitter, [TOPICS.paid, REF1, topic(WALLET), topic(net.usdc)], data(9_900_000n, 100_000n), B1, hash('1'), 3),
@@ -56,10 +60,13 @@ const LOGS: Log[] = [
   transfer(WALLET, P1, 1_000_000n, B4, hash('4')),
   transfer(WALLET, STRANGER, 2_000_000n, B5, hash('5')),
   transfer(WALLET, P2, 99_000_000n, B5, hash('6'), 1),
+  log(net.splitter, [TOPICS.paid, REF3, topic(WALLET), topic(net.usdc)], data(19_800_000n, 200_000n), BS, hash('9'), 2),
+  transfer(WALLET, P4, 5_000_000n, B6, hash('a')),
   // Before the window: must not appear.
   log(net.splitter, [TOPICS.paid, hash('c'), topic(WALLET), topic(net.usdc)], data(1n, 0n), 46_000_000, hash('8')),
 ]
 const RECEIPTS: Record<string, unknown> = {
+  [hash('9')]: { from: P4, logs: [transfer(P4, WALLET, 19_800_000n, BS, hash('9'), 1)] },
   [hash('1')]: { from: addr('5'), logs: [transfer(P1, WALLET, 9_900_000n, B1, hash('1'), 1), transfer(P1, addr('f'), 100_000n, B1, hash('1'), 2)] },
 }
 
@@ -179,8 +186,30 @@ test('statement: the window is by date, and a big range is split until the node 
   assert.deepEqual(rows.map((r) => r.tx_hash), [hash('2'), hash('3')])
   const logCalls = stub.seen.filter((c) => c.method === 'eth_getLogs')
   assert.ok(logCalls.every((c) => { const f = c.params[0] as { fromBlock: string; toBlock: string }; return parseInt(f.toBlock, 16) >= parseInt(f.fromBlock, 16) }))
-  // No reads below a contract's deploy block.
+  // No reads below a contract's deploy block - nor below the window: the wallet sent nothing, so there is no refund to look back for.
   assert.ok(logCalls.every((c) => parseInt((c.params[0] as { fromBlock: string }).fromBlock, 16) >= net.splitterDeployBlock))
+  assert.ok(logCalls.every((c) => parseInt((c.params[0] as { fromBlock: string }).fromBlock, 16) >= B2 - 10))
+})
+
+test('statement: September payment, October refund - the October statement shows the refund, not the payment', async () => {
+  const october = { from: tsOf(B6 - 1_000), to: tsOf(B6 + 10) }
+  assert.deepEqual(await run({ ...october, intents: [intent({ v: 1, reference: REF3, mr: 'INV-0930' })] }), [
+    {
+      date: new Date(tsOf(B6) * 1000).toISOString(),
+      tx_hash: hash('a'),
+      kind: 'refund?',
+      payer: P4,
+      reference: REF3,
+      merchant_ref: 'INV-0930',
+      gross: '-5.000000',
+      p2flux_fee: '0.000000',
+      network_fee: '0.000000',
+      net: '-5.000000',
+    },
+  ] satisfies StatementRow[])
+  // The payment is ~3.4 days before the window: a 1-day look-back (or none) does not reach it.
+  assert.deepEqual(await run({ ...october, lookbackDays: 1 }), [])
+  assert.deepEqual(await run({ ...october, lookbackDays: 0 }), [])
 })
 
 test('statement: a wallet with nothing in the window is an empty list; bad input is a TypeError', async () => {
@@ -188,6 +217,7 @@ test('statement: a wallet with nothing in the window is an empty list; bad input
   await assert.rejects(run({ wallet: 'nope' }), TypeError)
   await assert.rejects(run({ from: tsOf(B2), to: tsOf(B1) }), TypeError)
   await assert.rejects(run({ network: 'mars' as never }), TypeError)
+  await assert.rejects(run({ lookbackDays: -1 }), TypeError)
 })
 
 test('statement: an RPC that keeps failing is an error, not a short statement', async () => {

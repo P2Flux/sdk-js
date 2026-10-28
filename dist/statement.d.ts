@@ -8,9 +8,11 @@
  * No API call, no key, no dependency: raw JSON-RPC to public endpoints (or your own), so the numbers
  * do not depend on P2Flux being up - or honest. One row per settlement to the wallet (one-time
  * payments through the splitter and the sponsored splitter, subscription charges) and per probable
- * refund: a USDC transfer from the wallet back to a payer in the statement, after their payment and
- * no larger than it (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a
- * guess). Amounts are decimal USDC; a refund is negative.
+ * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than it
+ * (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
+ * may be up to `lookbackDays` (default 90) before `from`: a September payment refunded in October is
+ * on the October statement as a refund, without the September payment as a row. Amounts are decimal
+ * USDC; a refund is negative.
  *
  * `merchant_ref` is filled from the intents you pass (`intents`): they are decoded here, never sent
  * anywhere. Empty when unknown.
@@ -96,6 +98,11 @@ export type StatementOptions = {
     rpcUrls?: string[];
     /** Your intents (from createPayment), to fill `merchant_ref`. Decoded locally, never sent. */
     intents?: string[];
+    /**
+     * How far before `from` to look for the payment a refund in the window returns (default 90; 0 = only
+     * payments in the window). Read only when the wallet sent USDC in the window; those payments are not rows.
+     */
+    lookbackDays?: number;
     /** Injectable for tests; defaults to global fetch. */
     fetch?: typeof fetch;
 };

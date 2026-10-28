@@ -14,8 +14,8 @@
   recover, link and subscription status, `recoverCharge`, `verifyRefund` and confirmed notifications.
   `checkMerchantRef(reference, salt, ref)` proves the commitment with a built-in Keccak-256.
 - **Accounting statement**: new export `@p2flux/sdk/statement` - `statement({ wallet, from, to,
-  network?, rpcUrls?, intents? })` and `toCsv(rows, 'generic' | 'xero' | 'quickbooks')`, zero
-  dependencies, raw JSON-RPC.
+  network?, rpcUrls?, intents?, lookbackDays? })` and `toCsv(rows, 'generic' | 'xero' | 'quickbooks')`, zero
+  dependencies, raw JSON-RPC; refunds of payments up to `lookbackDays` (90) before the window included.
 - **Webhook delivery history**: `webhookDeliveries({ intent } | { manage })` and
   `redeliverWebhook(token, eventId)`.
 

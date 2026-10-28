@@ -8,9 +8,11 @@
  * No API call, no key, no dependency: raw JSON-RPC to public endpoints (or your own), so the numbers
  * do not depend on P2Flux being up - or honest. One row per settlement to the wallet (one-time
  * payments through the splitter and the sponsored splitter, subscription charges) and per probable
- * refund: a USDC transfer from the wallet back to a payer in the statement, after their payment and
- * no larger than it (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a
- * guess). Amounts are decimal USDC; a refund is negative.
+ * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than it
+ * (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
+ * may be up to `lookbackDays` (default 90) before `from`: a September payment refunded in October is
+ * on the October statement as a refund, without the September payment as a row. Amounts are decimal
+ * USDC; a refund is negative.
  *
  * `merchant_ref` is filled from the intents you pass (`intents`): they are decoded here, never sent
  * anywhere. Empty when unknown.
@@ -93,6 +95,11 @@ export type StatementOptions = {
   rpcUrls?: string[]
   /** Your intents (from createPayment), to fill `merchant_ref`. Decoded locally, never sent. */
   intents?: string[]
+  /**
+   * How far before `from` to look for the payment a refund in the window returns (default 90; 0 = only
+   * payments in the window). Read only when the wallet sent USDC in the window; those payments are not rows.
+   */
+  lookbackDays?: number
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch
 }
@@ -206,6 +213,8 @@ export async function statement(options: StatementOptions): Promise<StatementRow
   const fromTs = seconds(options.from)
   const toTs = seconds(options.to)
   if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs > toTs) throw new TypeError('from must be a time before to')
+  const lookbackDays = options.lookbackDays ?? 90
+  if (!Number.isInteger(lookbackDays) || lookbackDays < 0) throw new TypeError('lookbackDays must be a whole number of days, 0 or more')
   const rpc = rpcOver(options.rpcUrls?.length ? options.rpcUrls : [...net.rpcUrls], options.fetch ?? globalThis.fetch)
   const wallet = options.wallet.toLowerCase()
   const walletTopic = topicOf(wallet)
@@ -215,10 +224,9 @@ export async function statement(options: StatementOptions): Promise<StatementRow
   // Widened by a few blocks either way; rows are then held to the dates themselves.
   const fromBlock = Math.max(0, (await blockNear(rpc, fromTs, latest)) - 5)
   const toBlock = Math.min(latest.n, (await blockNear(rpc, toTs, latest)) + 5)
-  const span = (c: Contract) => [Math.max(fromBlock, c.deployBlock), toBlock] as const
-  const scan = async (c: Contract, topics: unknown[]) => {
-    const [a, b] = span(c)
-    return a > b ? [] : getLogs(rpc, c.address, topics, a, b)
+  const scanIn = (lo: number, hi: number) => async (c: Contract, topics: unknown[]) => {
+    const a = Math.max(lo, c.deployBlock)
+    return a > hi ? [] : getLogs(rpc, c.address, topics, a, hi)
   }
 
   const entries: Entry[] = []
@@ -239,60 +247,69 @@ export async function statement(options: StatementOptions): Promise<StatementRow
     },
   })
 
-  // One-time payments through the splitter: the payer is whoever's USDC reached the wallet in that transaction.
-  const paid = (
-    await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...net.retired.splitters].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))
-  ).flat()
-  const receipts = (await rpc(paid.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]]))) as ({ from?: string; logs?: Log[] } | null)[]
-  paid.forEach((l, i) => {
-    const [netUnits = 0n, fee = 0n] = words(l.data)
-    const receipt = receipts[i]
-    const t = receipt?.logs?.find(
-      (r) => r.address.toLowerCase() === net.usdc.toLowerCase() && r.topics[0] === TOPICS.transfer && addressOf(r.topics[2] ?? '') === wallet && words(r.data)[0] === netUnits,
-    )
-    entries.push(row(l, 'payment', t ? addressOf(t.topics[1]!) : (receipt?.from ?? ''), l.topics[1]!, netUnits + fee, fee, 0n, netUnits))
-  })
+  /** Payments and subscription charges to the wallet in blocks [lo, hi]. */
+  const settlements = async (lo: number, hi: number) => {
+    const scan = scanIn(lo, hi)
+    // One-time payments through the splitter: the payer is whoever's USDC reached the wallet in that transaction.
+    const paid = (
+      await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...net.retired.splitters].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))
+    ).flat()
+    const receipts = (await rpc(paid.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]]))) as ({ from?: string; logs?: Log[] } | null)[]
+    paid.forEach((l, i) => {
+      const [netUnits = 0n, fee = 0n] = words(l.data)
+      const receipt = receipts[i]
+      const t = receipt?.logs?.find(
+        (r) => r.address.toLowerCase() === net.usdc.toLowerCase() && r.topics[0] === TOPICS.transfer && addressOf(r.topics[2] ?? '') === wallet && words(r.data)[0] === netUnits,
+      )
+      entries.push(row(l, 'payment', t ? addressOf(t.topics[1]!) : (receipt?.from ?? ''), l.topics[1]!, netUnits + fee, fee, 0n, netUnits))
+    })
 
-  // Sponsored: the merchant funds the fee and the fixed network fee out of the amount; the buyer's quoted network fee is on top.
-  const sponsored = (
-    await Promise.all(
-      [{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...net.retired.sponsoredSplitters].map((c) =>
-        scan(c, [TOPICS.sponsoredPaid, null, walletTopic]),
-      ),
-    )
-  ).flat()
-  for (const l of sponsored) {
-    const [netUnits = 0n, fee = 0n, , fixed = 0n] = words(l.data)
-    entries.push(row(l, 'payment', addressOf(l.topics[3]!), l.topics[1]!, netUnits + fee + fixed, fee, fixed, netUnits))
-  }
+    // Sponsored: the merchant funds the fee and the fixed network fee out of the amount; the buyer's quoted network fee is on top.
+    const sponsored = (
+      await Promise.all(
+        [{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...net.retired.sponsoredSplitters].map((c) =>
+          scan(c, [TOPICS.sponsoredPaid, null, walletTopic]),
+        ),
+      )
+    ).flat()
+    for (const l of sponsored) {
+      const [netUnits = 0n, fee = 0n, , fixed = 0n] = words(l.data)
+      entries.push(row(l, 'payment', addressOf(l.topics[3]!), l.topics[1]!, netUnits + fee + fixed, fee, fixed, netUnits))
+    }
 
-  // Subscription charges: net + fee + networkFee is the amount; the payer's gas reimbursement is on top.
-  for (const l of await scan({ address: net.recurring, deployBlock: net.recurringDeployBlock }, [TOPICS.subscriptionCharged, null, null, walletTopic])) {
-    const [, netUnits = 0n, fee = 0n, networkFee = 0n] = words(l.data)
-    entries.push(row(l, 'subscription', addressOf(l.topics[2]!), l.topics[1]!, netUnits + fee + networkFee, fee, networkFee, netUnits))
-  }
-
-  // Probable refunds: USDC from the wallet to a payer above, later than one of their payments and no larger.
-  const payers = [...new Set(entries.map((e) => e.row.payer).filter((p) => /^0x[0-9a-f]{40}$/.test(p)))]
-  for (let i = 0; i < payers.length; i += 100) {
-    const out = await getLogs(rpc, net.usdc, [TOPICS.transfer, walletTopic, payers.slice(i, i + 100).map(topicOf)], fromBlock, toBlock)
-    for (const l of out) {
-      const to = addressOf(l.topics[2]!)
-      const amount = words(l.data)[0] ?? 0n
-      const { block: b, index } = at(l)
-      const original = entries
-        .filter((e) => e.row.kind !== 'refund?' && e.row.payer === to && (e.block < b || (e.block === b && e.index < index)) && e.gross >= amount)
-        .sort((x, y) => y.block - x.block || y.index - x.index)[0]
-      if (original) entries.push(row(l, 'refund?', to, original.row.reference, -amount, 0n, 0n, -amount))
+    // Subscription charges: net + fee + networkFee is the amount; the payer's gas reimbursement is on top.
+    for (const l of await scan({ address: net.recurring, deployBlock: net.recurringDeployBlock }, [TOPICS.subscriptionCharged, null, null, walletTopic])) {
+      const [, netUnits = 0n, fee = 0n, networkFee = 0n] = words(l.data)
+      entries.push(row(l, 'subscription', addressOf(l.topics[2]!), l.topics[1]!, netUnits + fee + networkFee, fee, networkFee, netUnits))
     }
   }
+  await settlements(fromBlock, toBlock)
 
-  // Dates, one batched read per distinct block.
-  const blocks = [...new Set(entries.map((e) => e.block))]
+  // Probable refunds: USDC from the wallet in the window to a payer, later than one of their payments and no
+  // larger. Only when the wallet sent anything are the look-back's payments read (they match, they are not rows).
+  const sent = await getLogs(rpc, net.usdc, [TOPICS.transfer, walletTopic], fromBlock, toBlock)
+  if (sent.length && lookbackDays > 0) {
+    const lookFrom = Math.max(0, (await blockNear(rpc, fromTs - lookbackDays * 86_400, latest)) - 5)
+    if (lookFrom < fromBlock) await settlements(lookFrom, fromBlock - 1)
+  }
+  const settled = entries.slice()
+  for (const l of sent) {
+    const to = addressOf(l.topics[2]!)
+    const amount = words(l.data)[0] ?? 0n
+    const { block: b, index } = at(l)
+    const original = settled
+      .filter((e) => e.row.payer === to && (e.block < b || (e.block === b && e.index < index)) && e.gross >= amount)
+      .sort((x, y) => y.block - x.block || y.index - x.index)[0]
+    if (original) entries.push(row(l, 'refund?', to, original.row.reference, -amount, 0n, 0n, -amount))
+  }
+
+  // Dates, one batched read per distinct block (the look-back's payments are below the window: no rows).
+  const inWindow = entries.filter((e) => e.block >= fromBlock)
+  const blocks = [...new Set(inWindow.map((e) => e.block))]
   const times = (await rpc(blocks.map((n) => ['eth_getBlockByNumber', [hexNum(n), false]]))) as { timestamp: string }[]
   const tsByBlock = new Map(blocks.map((n, i) => [n, parseInt(times[i]!.timestamp, 16)]))
 
-  return entries
+  return inWindow
     .filter((e) => {
       const ts = tsByBlock.get(e.block)!
       return ts >= fromTs && ts <= toTs
