@@ -103,3 +103,22 @@ test('verifyWebhook: toleranceSec must be a finite number >= 0 (TypeError otherw
   }
   assert.ok(await offline.verifyWebhook(BODY, HEADER, { keys: KEYS, now: T, toleranceSec: 0 }))
 })
+
+test('verifyWebhook: a failed refetch (unknown kid, API down) keeps the keys already known', async (t) => {
+  let up = true
+  let calls = 0
+  const impl = (async () => {
+    calls++
+    if (!up) throw new Error('down')
+    return { status: 200, json: async () => ({ chain_id: 8453, tokens: [], webhook_signing_keys: [{ kid: KID, alg: 'Ed25519', public_key: PUBLIC_KEY }] }) } as never
+  }) as unknown as typeof fetch
+  const p2flux = createP2Flux({ apiUrl: 'https://api.p2flux.example', fetch: impl })
+  assert.ok(await p2flux.verifyWebhook(BODY, HEADER, { now: T }))
+  const realNow = Date.now
+  t.after(() => (Date.now = realNow))
+  Date.now = () => realNow() + 61_000
+  up = false
+  await assert.rejects(p2flux.verifyWebhook(BODY, HEADER.replace(KID, 'rotated'), { now: T }), (e: unknown) => e instanceof P2FluxError && e.status === 'NETWORK_ERROR')
+  assert.ok(await p2flux.verifyWebhook(BODY, HEADER, { now: T }), 'the known key still verifies, without asking the API')
+  assert.equal(calls, 2)
+})

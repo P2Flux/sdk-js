@@ -1273,16 +1273,25 @@ export function createP2Flux(options: P2FluxOptions) {
   }
 
   /* The webhook signing keys from capabilities: fetched once, again only for a kid not seen yet
-   * (a rotation), and then at most once a minute so forged kids cannot make every check a fetch. */
-  let signingKeys: { at: number; keys: Promise<Record<string, string>> } | undefined
+   * (a rotation), and then at most once a minute so forged kids cannot make every check a fetch.
+   * A failed refetch keeps the keys already known: the map is swapped only after a good answer. */
+  let knownKeys: Record<string, string> | undefined
+  let keysAt = 0
+  let keysFetch: Promise<void> | undefined
+  const fetchKeys = () =>
+    (keysFetch ??= client
+      .capabilities()
+      .then((c) => {
+        knownKeys = Object.fromEntries((c.webhookSigningKeys ?? []).map((k) => [k.kid, k.publicKey]))
+      })
+      .finally(() => (keysFetch = undefined)))
   const signingKey = async (kid: string, retry: boolean): Promise<string | undefined> => {
-    if (!signingKeys || (retry && Date.now() - signingKeys.at > 60_000)) {
-      const keys = client.capabilities().then((c) => Object.fromEntries((c.webhookSigningKeys ?? []).map((k) => [k.kid, k.publicKey])))
-      signingKeys = { at: Date.now(), keys }
-      keys.catch(() => (signingKeys = undefined))
-    } else if (retry) return undefined
-    const keys = await signingKeys.keys
-    return Object.hasOwn(keys, kid) ? keys[kid] : undefined
+    if (!knownKeys || retry) {
+      if (knownKeys && Date.now() - keysAt <= 60_000) return undefined
+      keysAt = Date.now()
+      await fetchKeys()
+    }
+    return Object.hasOwn(knownKeys!, kid) ? knownKeys![kid] : undefined
   }
 
   const client = {
