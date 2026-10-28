@@ -8,8 +8,8 @@
  * No API call, no key, no dependency: raw JSON-RPC to public endpoints (or your own), so the numbers
  * do not depend on P2Flux being up - or honest. One row per settlement to the wallet (one-time
  * payments through the splitter and the sponsored splitter, subscription charges) and per probable
- * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than it
- * (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
+ * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than what is
+ * left of it (each payment is refunded at most up to its gross) (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
  * may be up to `lookbackDays` (default 90) before `from`: a September payment refunded in October is
  * on the October statement as a refund, without the September payment as a row. Amounts are decimal
  * USDC; a refund is negative.
@@ -132,6 +132,8 @@ export type StatementOptions = {
     currencies?: StatementCurrency[];
     /** Where the exchange rates come from (`currencies` only). Default 'https://api.p2flux.com'. */
     apiUrl?: string;
+    /** Per JSON-RPC request, in ms (default 30,000): a node that hangs fails the request, then the next URL is tried. */
+    timeoutMs?: number;
     /** Injectable for tests; defaults to global fetch. */
     fetch?: typeof fetch;
 };
@@ -152,7 +154,9 @@ export declare function statementOn(net: StatementContracts, options: Omit<State
  *   (merchant_ref, else the on-chain reference).
  * - `quickbooks`: the 3-column bank upload - Date (mm/dd/yyyy), Description, Amount (net).
  *
- * The amount booked is `net`, what reached the wallet; gross and fees are in the description. Rows
+ * The amount booked is `net`, what reached the wallet: 6 decimals in generic; Xero and QuickBooks take
+ * 2, so their Amount is `net` rounded to cents (half away from zero, as the currency columns) and the
+ * description keeps the exact 6-decimal gross, fees and net. Rows
  * with `currencies` values: generic adds the value columns; xero and quickbooks keep their layout (amount
  * in USD) and name the EUR/GBP values and the ECB day in the description.
  */

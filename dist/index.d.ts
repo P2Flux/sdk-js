@@ -33,6 +33,8 @@ export type ChargeResult = {
     nextPeriodAt?: string;
     /** The charge's own merchant_ref (`charge(ref, { merchantRef })`), else the subscription's, when the API echoes one. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     /** The raw API body, for logging or fields added after this SDK was written. */
     raw: Record<string, unknown>;
 };
@@ -50,6 +52,8 @@ export type SubscriptionStatus = {
     allowanceUnlimited: boolean;
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 /** Calldata for the customer's own wallet to send. P2Flux cannot revoke wallet authority. */
@@ -82,6 +86,8 @@ export type RecoveredPayment = {
     asOfBlock?: string;
     /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     referenceSalt?: string;
     raw: Record<string, unknown>;
 };
@@ -112,6 +118,8 @@ export type RecoveredCharge = {
     asOfBlock?: string;
     /** Present when the API echoes the charge's (or subscription's) merchant_ref. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 /** Where your own records say a charge was attempted. Narrows the search; never evidence. */
@@ -192,6 +200,8 @@ export type RefundVerification = {
     amount?: string;
     /** Present when the original payment was created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 /** Terms for a one-time payment: who gets paid, and how much USDC (decimal string, "12.50"). */
@@ -303,6 +313,8 @@ export type PaymentIntent = {
     checkoutUrl?: string;
     /** Present when created with `merchantRef`, with the salt that proves `reference` commits to it (`checkMerchantRef`). */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     referenceSalt?: string;
     raw: Record<string, unknown>;
 };
@@ -327,6 +339,8 @@ export type ResolvedPayment = {
     privatePayment?: 'hinkal';
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 /** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
@@ -441,6 +455,8 @@ export type PaymentVerification = {
     screening?: 'clear' | 'sanctioned' | 'unknown';
     /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     referenceSalt?: string;
     raw: Record<string, unknown>;
 } | {
@@ -488,6 +504,8 @@ export type SubscriptionSetup = {
     salt: string;
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms plus the exact EIP-712 payload the customer's wallet signs. */
@@ -513,6 +531,8 @@ export type ResolvedSubscription = {
     sponsorship?: SubscriptionSponsorship;
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     raw: Record<string, unknown>;
 };
 export type FinalizedSubscription = {
@@ -616,6 +636,8 @@ export type PaymentLinkTermsView = {
     suspendAfterDays?: number;
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
 };
 export type PaymentLink = PaymentLinkTermsView & {
     /** The public link token. Send `checkoutLink('link', link)` to buyers. */
@@ -646,6 +668,8 @@ export type NotificationResult = {
     payment?: PaymentVerification;
     /** payment.paid confirmed, created with `merchantRef`: from the verdict (never from the event body). */
     merchantRef?: string;
+    /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+    merchantRefVerified?: boolean;
     referenceSalt?: string;
     /** subscription.*: the subscriber as the manage view shows it now. */
     subscriber?: PaymentLinkSubscriber;
@@ -764,8 +788,11 @@ export declare function merchantTokenMessage(chainId: number, wallet: string, is
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
- * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
- * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove the payment on chain was
+ * CREATED WITH that merchantRef. Not who created it: anyone can create a payment to any wallet with any
+ * merchantRef. Ownership comes from your own records (the intent or reference you stored for the order)
+ * or `merchantRefVerified` (the creator proved control of the receiving wallet). `salt` is the
+ * `referenceSalt` the payment came back with. Malformed input is false.
  */
 export declare function checkMerchantRef(reference: string, salt: string, merchantRef: string): boolean;
 export declare function createP2Flux(options: P2FluxOptions): {
@@ -907,7 +934,8 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * timeout or a crash returns ALREADY_CHARGED instead of charging again.
      *
      * `merchantRef`: this charge's own invoice number (same rules as `PaymentTerms.merchantRef`),
-     * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref.
+     * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref. Send the same merchantRef when retrying a charge: it is echoed from the request (stateless), so a
+     * retry with another ref echoes that one.
      */
     charge(subscriptionRef: string, options?: {
         merchantRef?: string;
@@ -1085,7 +1113,10 @@ export declare function createP2Flux(options: P2FluxOptions): {
      *
      * Optional `expect.signature`: the `p2flux-signature` header. Given, the raw body (a string) is
      * checked first (`verifyWebhook`, with `keys` / `toleranceSec` as there) and a bad or stale one
-     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
+     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD: answer those
+     * with a 4xx/5xx, never a 2xx, so the event is sent again and shows in the delivery history.
+     * `signature` undefined or null (no header: an API before the signing release) checks the event
+     * unsigned - accepted only because the API's verdict decides, never the event body.
      */
     handleNotification(notification: string | Record<string, unknown>, expect: {
         reference?: string;

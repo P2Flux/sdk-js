@@ -139,7 +139,7 @@ const linkTerms = (b) => ({
     ...(b.period ? { period: b.period } : {}),
     ...(b.periods ? { periods: b.periods } : {}),
     ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days } : {}),
-    ...(b.merchant_ref ? { merchantRef: b.merchant_ref } : {}),
+    ...refEcho(b),
 });
 const linkPayment = (p) => ({
     txHash: p.tx_hash,
@@ -231,9 +231,14 @@ function intentReference(intent) {
         return '';
     }
 }
-/** `merchant_ref` / `reference_salt` from an answer, in camelCase; nothing when absent. */
+/** `merchant_ref` / `merchant_ref_verified` from an answer, in camelCase; nothing when absent. */
+const refEcho = (b) => ({
+    ...(typeof b.merchant_ref === 'string' && b.merchant_ref ? { merchantRef: b.merchant_ref } : {}),
+    ...(typeof b.merchant_ref_verified === 'boolean' ? { merchantRefVerified: b.merchant_ref_verified } : {}),
+});
+/** `merchant_ref` / `merchant_ref_verified` / `reference_salt` from an answer, in camelCase; nothing when absent. */
 const merchantRefOf = (b) => ({
-    ...(typeof b.merchant_ref === 'string' ? { merchantRef: b.merchant_ref } : {}),
+    ...refEcho(b),
     ...(typeof b.reference_salt === 'string' ? { referenceSalt: b.reference_salt } : {}),
 });
 /** The rule the API applies to a merchant_ref. */
@@ -260,8 +265,11 @@ const hexBytes = (hex) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) =
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
- * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
- * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove the payment on chain was
+ * CREATED WITH that merchantRef. Not who created it: anyone can create a payment to any wallet with any
+ * merchantRef. Ownership comes from your own records (the intent or reference you stored for the order)
+ * or `merchantRefVerified` (the creator proved control of the receiving wallet). `salt` is the
+ * `referenceSalt` the payment came back with. Malformed input is false.
  */
 export function checkMerchantRef(reference, salt, merchantRef) {
     if (!/^0x[0-9a-fA-F]{64}$/.test(reference) || !/^0x[0-9a-fA-F]{64}$/.test(salt) || !MERCHANT_REF.test(merchantRef))
@@ -384,23 +392,30 @@ export function createP2Flux(options) {
             subscriptionId: body.subscription_id,
             periodIndex: body.period_index,
             nextPeriodAt: body.next_period_at,
-            ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
+            ...refEcho(body),
             raw: body,
         };
     };
     /* The webhook signing keys from capabilities: fetched once, again only for a kid not seen yet
-     * (a rotation), and then at most once a minute so forged kids cannot make every check a fetch. */
-    let signingKeys;
+     * (a rotation), and then at most once a minute so forged kids cannot make every check a fetch.
+     * A failed refetch keeps the keys already known: the map is swapped only after a good answer. */
+    let knownKeys;
+    let keysAt = 0;
+    let keysFetch;
+    const fetchKeys = () => (keysFetch ??= client
+        .capabilities()
+        .then((c) => {
+        knownKeys = Object.fromEntries((c.webhookSigningKeys ?? []).map((k) => [k.kid, k.publicKey]));
+    })
+        .finally(() => (keysFetch = undefined)));
     const signingKey = async (kid, retry) => {
-        if (!signingKeys || (retry && Date.now() - signingKeys.at > 60_000)) {
-            const keys = client.capabilities().then((c) => Object.fromEntries((c.webhookSigningKeys ?? []).map((k) => [k.kid, k.publicKey])));
-            signingKeys = { at: Date.now(), keys };
-            keys.catch(() => (signingKeys = undefined));
+        if (!knownKeys || retry) {
+            if (knownKeys && Date.now() - keysAt <= 60_000)
+                return undefined;
+            keysAt = Date.now();
+            await fetchKeys();
         }
-        else if (retry)
-            return undefined;
-        const keys = await signingKeys.keys;
-        return Object.hasOwn(keys, kid) ? keys[kid] : undefined;
+        return Object.hasOwn(knownKeys, kid) ? knownKeys[kid] : undefined;
     };
     const client = {
         /**
@@ -417,7 +432,10 @@ export function createP2Flux(options) {
         async verifyWebhook(rawBody, header, options = {}) {
             const bytes = typeof rawBody === 'string' ? new TextEncoder().encode(rawBody) : rawBody;
             const keys = options.keys;
-            const failure = await checkSignature(bytes, header, keys ? async (kid) => (Object.hasOwn(keys, kid) ? keys[kid] : undefined) : signingKey, options.toleranceSec ?? 300, options.now ?? Math.floor(Date.now() / 1000));
+            const tolerance = options.toleranceSec ?? 300;
+            if (typeof tolerance !== 'number' || !Number.isFinite(tolerance) || tolerance < 0)
+                throw new TypeError('toleranceSec must be a finite number of seconds, 0 or more');
+            const failure = await checkSignature(bytes, header, keys ? async (kid) => (Object.hasOwn(keys, kid) ? keys[kid] : undefined) : signingKey, tolerance, options.now ?? Math.floor(Date.now() / 1000));
             if (failure)
                 throw new P2FluxError(failure, 'INVALID_REQUEST');
             try {
@@ -504,7 +522,7 @@ export function createP2Flux(options) {
                     : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
                 ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
-                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -676,7 +694,7 @@ export function createP2Flux(options) {
                 contract: body.contract,
                 amount: body.amount,
                 salt: body.salt,
-                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -721,7 +739,7 @@ export function createP2Flux(options) {
                             networkFeeAuthorization: body.network_fee_authorization,
                         },
                     }),
-                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -780,7 +798,8 @@ export function createP2Flux(options) {
          * timeout or a crash returns ALREADY_CHARGED instead of charging again.
          *
          * `merchantRef`: this charge's own invoice number (same rules as `PaymentTerms.merchantRef`),
-         * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref.
+         * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref. Send the same merchantRef when retrying a charge: it is echoed from the request (stateless), so a
+         * retry with another ref echoes that one.
          */
         async charge(subscriptionRef, options = {}) {
             return chargeAt('/v1/charges', {
@@ -891,7 +910,7 @@ export function createP2Flux(options) {
                 periodEnd: body.period_end,
                 nextPeriodAt: body.next_period_at,
                 allowanceUnlimited: body.allowance_unlimited,
-                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -977,7 +996,7 @@ export function createP2Flux(options) {
                 status,
                 action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS'),
                 asOfBlock: body.as_of_block,
-                ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -1132,7 +1151,7 @@ export function createP2Flux(options) {
                  * CHARGE response uses - meant both were silently undefined on every successful refund. */
                 txHash: body.refund_tx_hash,
                 amount: body.refund_amount,
-                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
+                ...refEcho(body),
                 raw: body,
             };
         },
@@ -1212,7 +1231,10 @@ export function createP2Flux(options) {
          *
          * Optional `expect.signature`: the `p2flux-signature` header. Given, the raw body (a string) is
          * checked first (`verifyWebhook`, with `keys` / `toleranceSec` as there) and a bad or stale one
-         * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
+         * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD: answer those
+         * with a 4xx/5xx, never a 2xx, so the event is sent again and shows in the delivery history.
+         * `signature` undefined or null (no header: an API before the signing release) checks the event
+         * unsigned - accepted only because the API's verdict decides, never the event body.
          */
         async handleNotification(notification, expect) {
             if (!expect || (!expect.reference && !expect.linkId))
@@ -1222,7 +1244,7 @@ export function createP2Flux(options) {
                 throw new TypeError('expect.reference must be the 32-byte reference from createPayment');
             if (expect.linkId && !/^0x[0-9a-fA-F]{32}$/.test(expect.linkId))
                 throw new TypeError('expect.linkId must be the 16-byte link id');
-            if (expect.signature !== undefined) {
+            if (expect.signature != null) {
                 if (typeof notification !== 'string')
                     throw new TypeError('expect.signature needs the raw body as a string');
                 try {
@@ -1286,6 +1308,7 @@ export function createP2Flux(options) {
                     dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`,
                     payment: verdict,
                     ...(verdict.merchantRef ? { merchantRef: verdict.merchantRef } : {}),
+                    ...(verdict.merchantRefVerified !== undefined ? { merchantRefVerified: verdict.merchantRefVerified } : {}),
                     ...(verdict.referenceSalt ? { referenceSalt: verdict.referenceSalt } : {}),
                 };
             }
