@@ -347,6 +347,13 @@ export type SponsoredPaymentResult = {
  * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
  * did not publish carries the last published day's rates, named in `rateDate`.
  */
+/** From `createMerchantToken()`: send `merchantToken` as `createP2Flux({ merchantToken })`. */
+export type MerchantToken = {
+    merchantToken: string;
+    wallet: string;
+    expiresAt: number;
+    raw: Record<string, unknown>;
+};
 export type Rates = {
     source: 'ECB';
     base: 'EUR';
@@ -724,6 +731,13 @@ export type P2FluxOptions = {
      * for example `https://pay.yourcompany.com` or `https://yourcompany.com/pay`.
      */
     checkoutUrl?: string;
+    /**
+     * A token from `createMerchantToken()`, sent as the `p2flux-merchant-token` header. Requests paying
+     * the token's wallet are then rate limited per wallet (higher) instead of per IP. Capacity only.
+     */
+    merchantToken?: string;
+    /** For confirmed partners: `<kid>.<secret>`, sent as the `p2flux-partner-key` header. */
+    partnerKey?: string;
 };
 /** The pages of the checkout a link can open. */
 /** `link` opens a payment link for a buyer; `links` is the merchant's private overview of one. */
@@ -740,6 +754,11 @@ export type SubscriptionSponsorship = {
 };
 /** The rule the API applies to a merchant_ref. */
 export declare const MERCHANT_REF: RegExp;
+/**
+ * The exact text a receiving wallet signs with `personal_sign` for `createMerchantToken()`. `chainId` is
+ * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent.
+ */
+export declare function merchantTokenMessage(chainId: number, wallet: string, issuedAt: number): string;
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
@@ -817,6 +836,16 @@ export declare function createP2Flux(options: P2FluxOptions): {
         from: string;
         to: string;
     }): Promise<Rates>;
+    /**
+     * Prove your receiving wallet once for higher limits: sign `merchantTokenMessage(chainId, wallet,
+     * issuedAt)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
+     * `createP2Flux({ merchantToken })`. Valid 30 days; it moves no money and opens no data.
+     */
+    createMerchantToken(input: {
+        wallet: string;
+        signature: string;
+        issuedAt: number;
+    }): Promise<MerchantToken>;
     /**
      * What this deployment supports, before you offer a buyer anything.
      *

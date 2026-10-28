@@ -488,6 +488,9 @@ export type SponsoredPaymentResult = {
  * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
  * did not publish carries the last published day's rates, named in `rateDate`.
  */
+/** From `createMerchantToken()`: send `merchantToken` as `createP2Flux({ merchantToken })`. */
+export type MerchantToken = { merchantToken: string; wallet: string; expiresAt: number; raw: Record<string, unknown> }
+
 export type Rates = {
   source: 'ECB'
   base: 'EUR'
@@ -995,6 +998,13 @@ export type P2FluxOptions = {
    * for example `https://pay.yourcompany.com` or `https://yourcompany.com/pay`.
    */
   checkoutUrl?: string
+  /**
+   * A token from `createMerchantToken()`, sent as the `p2flux-merchant-token` header. Requests paying
+   * the token's wallet are then rate limited per wallet (higher) instead of per IP. Capacity only.
+   */
+  merchantToken?: string
+  /** For confirmed partners: `<kid>.<secret>`, sent as the `p2flux-partner-key` header. */
+  partnerKey?: string
 }
 
 /** The pages of the checkout a link can open. */
@@ -1104,6 +1114,22 @@ const merchantRefOf = (b: Record<string, unknown>) => ({
 /** The rule the API applies to a merchant_ref. */
 export const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/
 
+/**
+ * The exact text a receiving wallet signs with `personal_sign` for `createMerchantToken()`. `chainId` is
+ * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent.
+ */
+export function merchantTokenMessage(chainId: number, wallet: string, issuedAt: number): string {
+  return [
+    'P2Flux merchant token',
+    '',
+    'This signature only raises your P2Flux API limits. It moves no funds and approves nothing.',
+    '',
+    `Wallet: ${wallet.toLowerCase()}`,
+    `Chain ID: ${chainId}`,
+    `Issued at: ${issuedAt}`,
+  ].join('\n')
+}
+
 const hexBytes = (hex: string) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16))
 
 /**
@@ -1177,6 +1203,11 @@ export function createP2Flux(options: P2FluxOptions) {
   const base = options.apiUrl.replace(/\/$/, '')
   const timeoutMs = options.timeoutMs ?? 60_000
   const fetchImpl = options.fetch ?? globalThis.fetch
+  const limitHeaders: Record<string, string> = {
+    'content-type': 'application/json',
+    ...(options.merchantToken ? { 'p2flux-merchant-token': options.merchantToken } : {}),
+    ...(options.partnerKey ? { 'p2flux-partner-key': options.partnerKey } : {}),
+  }
 
   const post = async (path: string, body: unknown): Promise<{ httpStatus: number; body: Record<string, unknown> }> => {
     const controller = new AbortController()
@@ -1184,7 +1215,7 @@ export function createP2Flux(options: P2FluxOptions) {
     try {
       const res = await fetchImpl(`${base}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: limitHeaders,
         body: JSON.stringify(body),
         signal: controller.signal,
       })
@@ -1435,6 +1466,16 @@ export function createP2Flux(options: P2FluxOptions) {
         fetchedAt: body.fetched_at as number,
         rates: Object.fromEntries(Object.entries(days).map(([day, r]) => [day, { USD: r.USD, GBP: r.GBP, rateDate: r.rate_date }])),
       }
+    },
+
+    /**
+     * Prove your receiving wallet once for higher limits: sign `merchantTokenMessage(chainId, wallet,
+     * issuedAt)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
+     * `createP2Flux({ merchantToken })`. Valid 30 days; it moves no money and opens no data.
+     */
+    async createMerchantToken(input: { wallet: string; signature: string; issuedAt: number }): Promise<MerchantToken> {
+      const body = await postOrThrow('/v1/merchant-token', { wallet: input.wallet, signature: input.signature, issued_at: input.issuedAt })
+      return { merchantToken: body.merchant_token as string, wallet: body.wallet as string, expiresAt: body.expires_at as number, raw: body }
     },
 
     /**

@@ -179,6 +179,24 @@ fulfilling. `p2flux_status=confirming` means sent, not yet deep enough - keep ch
 
 Full walk-through: [The payment lifecycle](docs/payment-flow.md).
 
+### Higher limits: `merchantToken`
+
+Many shops behind one server address share its per-IP limits. Prove your receiving wallet once and
+requests paying that wallet are counted per wallet instead (higher, still bounded):
+
+```ts
+import { createP2Flux, merchantTokenMessage } from '@p2flux/sdk'
+
+const { chainId } = await p2flux.capabilities()
+const issuedAt = Math.floor(Date.now() / 1000)
+const signature = await wallet.signMessage({ message: merchantTokenMessage(chainId, recipient, issuedAt) })
+const { merchantToken } = await p2flux.createMerchantToken({ wallet: recipient, signature, issuedAt })
+const merchant = createP2Flux({ apiUrl: 'https://api.p2flux.com', merchantToken })
+```
+
+The token lasts 30 days, moves no money and opens no data; a Safe signs the same text. Confirmed
+partners pass `partnerKey` instead.
+
 ### Private payments with Hinkal: `privatePayment`
 
 On Base, a payment or a `once` / `reusable` link (not a subscription) can also offer **"Pay privately with Hinkal"**: the buyer pays
