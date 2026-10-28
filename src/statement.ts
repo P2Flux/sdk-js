@@ -128,12 +128,18 @@ export type StatementOptions = {
   currencies?: StatementCurrency[]
   /** Where the exchange rates come from (`currencies` only). Default 'https://api.p2flux.com'. */
   apiUrl?: string
+  /** Per JSON-RPC request, in ms (default 30,000): a node that hangs fails the request, then the next URL is tried. */
+  timeoutMs?: number
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch
 }
 
 type Log = { address: string; topics: string[]; data: string; blockNumber: string; transactionHash: string; logIndex: string }
-type Rpc = (calls: [string, unknown[]][]) => Promise<unknown[]>
+/** Batched JSON-RPC. `each`: a call's own JSON-RPC error comes back as an Error in its place instead of failing the batch. */
+type Rpc = {
+  (calls: [string, unknown[]][]): Promise<unknown[]>
+  (calls: [string, unknown[]][], each: true): Promise<(unknown | Error)[]>
+}
 
 const LOG_SPAN = 10_000 // mainnet.base.org serves 10,000 blocks per eth_getLogs
 const BATCH = 20
@@ -150,53 +156,83 @@ const usdc = (units: bigint) => {
   return `${sign}${s.slice(0, -6)}.${s.slice(-6)}`
 }
 
-/** Batched JSON-RPC over `urls`, the next URL on any failure; an error inside a batch fails the batch. */
-const rpcOver = (urls: string[], fetchImpl: typeof fetch): Rpc => async (calls) => {
-  const out: unknown[] = []
-  for (let i = 0; i < calls.length; i += BATCH) {
-    const chunk = calls.slice(i, i + BATCH)
+class RateLimited extends Error {}
+const RETRIES = 3 // rounds after every URL answered HTTP 429
+const BACKOFF_MS = 200 // doubled each round: 200, 400, 800
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Batched JSON-RPC over `urls` (20 calls a batch), the next URL on any failure; an error inside a batch
+ * fails the batch (unless `each`). When every URL answered HTTP 429 the round is retried after a backoff.
+ */
+const rpcOver = (urls: string[], fetchImpl: typeof fetch, timeoutMs: number): Rpc => {
+  const post = async (url: string, body: string) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: controller.signal })
+      if (res.status === 429) throw new RateLimited(`RPC ${url}: HTTP 429`)
+      if (!res.ok) throw new Error(`RPC ${url}: HTTP ${res.status}`)
+      const replies = (await res.json()) as { id: number; result?: unknown; error?: { message?: string } }[]
+      if (!Array.isArray(replies)) throw new Error(`RPC ${url}: not a batch answer`)
+      return new Map(replies.map((r) => [r.id, r]))
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  const batch = async (chunk: [string, unknown[]][], each: boolean) => {
     const body = JSON.stringify(chunk.map(([method, params], id) => ({ jsonrpc: '2.0', id, method, params })))
     let lastError: unknown = new Error('no RPC URL')
-    let answers: unknown[] | undefined
-    for (const url of urls) {
-      try {
-        const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
-        if (!res.ok) throw new Error(`RPC ${url}: HTTP ${res.status}`)
-        const replies = (await res.json()) as { id: number; result?: unknown; error?: { message?: string } }[]
-        if (!Array.isArray(replies)) throw new Error(`RPC ${url}: not a batch answer`)
-        const byId = new Map(replies.map((r) => [r.id, r]))
-        answers = chunk.map((_, id) => {
-          const r = byId.get(id)
-          if (!r || r.error || !('result' in r)) throw new Error(`RPC ${url}: ${r?.error?.message ?? 'no answer'}`)
-          return r.result
-        })
-        break
-      } catch (err) {
-        lastError = err
+    for (let round = 0; ; round++) {
+      let limited = false
+      for (const url of urls) {
+        try {
+          const byId = await post(url, body)
+          return chunk.map((_, id) => {
+            const r = byId.get(id)
+            if (r && !r.error && 'result' in r) return r.result
+            const err = new Error(`RPC ${url}: ${r?.error?.message ?? 'no answer'}`)
+            if (each) return err
+            throw err
+          })
+        } catch (err) {
+          lastError = err
+          limited ||= err instanceof RateLimited
+        }
       }
+      if (!limited || round >= RETRIES) throw lastError
+      await sleep(BACKOFF_MS * 2 ** round)
     }
-    if (!answers) throw lastError
-    out.push(...answers)
   }
-  return out
+  return (async (calls: [string, unknown[]][], each: unknown = false) => {
+    const out: unknown[] = []
+    for (let i = 0; i < calls.length; i += BATCH) out.push(...(await batch(calls.slice(i, i + BATCH), each === true)))
+    return out
+  }) as Rpc
 }
 
-/** Every log matching `topics` on `address` in [from, to], halving any range the node refuses. */
+const byPosition = (x: Log, y: Log) => parseInt(x.blockNumber, 16) - parseInt(y.blockNumber, 16) || parseInt(x.logIndex, 16) - parseInt(y.logIndex, 16)
+
+/**
+ * Every log matching `topics` on `address` in [from, to], oldest first: LOG_SPAN-block spans, 20 to a
+ * batch; a span the node refuses (its own JSON-RPC error, e.g. range too large) is halved and asked again.
+ */
 const getLogs = async (rpc: Rpc, address: string, topics: unknown[], from: number, to: number): Promise<Log[]> => {
   const out: Log[] = []
-  const range = async (a: number, b: number): Promise<void> => {
-    try {
-      const [logs] = await rpc([['eth_getLogs', [{ address, topics, fromBlock: hexNum(a), toBlock: hexNum(b) }]]])
-      out.push(...(logs as Log[]))
-    } catch (err) {
-      if (a === b) throw err
-      const mid = Math.floor((a + b) / 2)
-      await range(a, mid)
-      await range(mid + 1, b)
-    }
+  let spans: [number, number][] = []
+  for (let a = from; a <= to; a += LOG_SPAN) spans.push([a, Math.min(to, a + LOG_SPAN - 1)])
+  while (spans.length) {
+    const answers = await rpc(spans.map(([a, b]) => ['eth_getLogs', [{ address, topics, fromBlock: hexNum(a), toBlock: hexNum(b) }]]), true)
+    const refused: [number, number][] = []
+    answers.forEach((logs, i) => {
+      const [a, b] = spans[i]!
+      if (!(logs instanceof Error)) out.push(...(logs as Log[]))
+      else if (a === b) throw logs
+      else refused.push([a, Math.floor((a + b) / 2)], [Math.floor((a + b) / 2) + 1, b])
+    })
+    spans = refused
   }
-  for (let a = from; a <= to; a += LOG_SPAN) await range(a, Math.min(to, a + LOG_SPAN - 1))
-  return out
+  return out.sort(byPosition)
 }
 
 const block = async (rpc: Rpc, tag: number | 'latest') => {
@@ -260,7 +296,9 @@ export async function statementOn(net: StatementContracts, options: Omit<Stateme
   const currencies = options.currencies ?? []
   if (!Array.isArray(currencies) || currencies.some((c) => c !== 'EUR' && c !== 'GBP')) throw new TypeError("currencies may name 'EUR' and 'GBP'")
   if (!Number.isInteger(lookbackDays) || lookbackDays < 0) throw new TypeError('lookbackDays must be a whole number of days, 0 or more')
-  const rpc = rpcOver(options.rpcUrls, options.fetch ?? globalThis.fetch)
+  const timeoutMs = options.timeoutMs ?? 30_000
+  if (typeof timeoutMs !== 'number' || !(timeoutMs > 0)) throw new TypeError('timeoutMs must be a positive number')
+  const rpc = rpcOver(options.rpcUrls, options.fetch ?? globalThis.fetch, timeoutMs)
   const wallet = options.wallet.toLowerCase()
   const walletTopic = topicOf(wallet)
   const refs = merchantRefs(options.intents)
@@ -299,13 +337,21 @@ export async function statementOn(net: StatementContracts, options: Omit<Stateme
     const paid = (
       await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...(net.retired?.splitters ?? [])].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))
     ).flat()
-    const receipts = (await rpc(paid.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]]))) as ({ from?: string; logs?: Log[] } | null)[]
-    paid.forEach((l, i) => {
+    /* The payer: the sender of the USDC transfer of `net` to the wallet in that transaction - one Transfer
+     * scan over the payments' blocks; a transaction without one (none seen yet) falls back to its receipt. */
+    const payerIn = (logs: Log[], netUnits: bigint) =>
+      logs.find((r) => r.address.toLowerCase() === net.usdc.toLowerCase() && r.topics[0] === TOPICS.transfer && addressOf(r.topics[2] ?? '') === wallet && words(r.data)[0] === netUnits)
+    const blocksOf = paid.map((l) => parseInt(l.blockNumber, 16))
+    const incoming = paid.length ? await getLogs(rpc, net.usdc, [TOPICS.transfer, null, walletTopic], Math.min(...blocksOf), Math.max(...blocksOf)) : []
+    const byTx = new Map<string, Log[]>()
+    for (const t of incoming) byTx.set(t.transactionHash.toLowerCase(), [...(byTx.get(t.transactionHash.toLowerCase()) ?? []), t])
+    const unmatched = paid.filter((l) => !payerIn(byTx.get(l.transactionHash.toLowerCase()) ?? [], words(l.data)[0] ?? 0n))
+    const receipts = (await rpc(unmatched.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]]))) as ({ from?: string; logs?: Log[] } | null)[]
+    const receiptOf = new Map(unmatched.map((l, i) => [l, receipts[i]]))
+    paid.forEach((l) => {
       const [netUnits = 0n, fee = 0n] = words(l.data)
-      const receipt = receipts[i]
-      const t = receipt?.logs?.find(
-        (r) => r.address.toLowerCase() === net.usdc.toLowerCase() && r.topics[0] === TOPICS.transfer && addressOf(r.topics[2] ?? '') === wallet && words(r.data)[0] === netUnits,
-      )
+      const receipt = receiptOf.get(l)
+      const t = payerIn(receipt ? (receipt.logs ?? []) : (byTx.get(l.transactionHash.toLowerCase()) ?? []), netUnits)
       entries.push(row(l, 'payment', t ? addressOf(t.topics[1]!) : (receipt?.from ?? ''), l.topics[1]!, netUnits + fee, fee, 0n, netUnits))
     })
 

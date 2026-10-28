@@ -80,7 +80,16 @@ LOGS.push(
   transfer(W2, P5, 10_000_000n, 46_441_300, hash('0')),
   transfer(W2, P5, 1_000_000n, 46_441_400, '0x' + 'ab'.repeat(32)),
 )
+// The payers' USDC transfers into the wallet (what a receipt holds too): the payer of a native payment.
+const W4 = addr('e') // a native payment whose transfer is not in the logs: the payer comes from the receipt
+LOGS.push(
+  transfer(P1, WALLET, 9_900_000n, B1, hash('1'), 1),
+  transfer(P4, WALLET, 19_800_000n, BS, hash('9'), 1),
+  transfer(addr('5'), WALLET, 1n, 46_000_000, hash('8'), 1),
+  log(net.splitter, [TOPICS.paid, hash('3'), topic(W4), topic(net.usdc)], data(2_000_000n, 0n), 46_440_400, '0x' + 'cd'.repeat(32), 4),
+)
 const RECEIPTS: Record<string, unknown> = {
+  ['0x' + 'cd'.repeat(32)]: { from: addr('5'), logs: [] },
   [hash('9')]: { from: P4, logs: [transfer(P4, WALLET, 19_800_000n, BS, hash('9'), 1)] },
   [hash('1')]: { from: addr('5'), logs: [transfer(P1, WALLET, 9_900_000n, B1, hash('1'), 1), transfer(P1, addr('f'), 100_000n, B1, hash('1'), 2)] },
 }
@@ -88,7 +97,9 @@ const RECEIPTS: Record<string, unknown> = {
 const matches = (want: unknown, got: string | undefined) =>
   want === null || want === undefined || (Array.isArray(want) ? want.some((w) => w.toLowerCase() === got?.toLowerCase()) : String(want).toLowerCase() === got?.toLowerCase())
 
-const rpcStub = () => {
+/** `limit`: the widest eth_getLogs range served (wider is a JSON-RPC error); `status(n)`: the HTTP status of the n-th request. */
+const rpcStub = ({ limit = 5_000, status = (_n: number): number => 200 } = {}) => {
+  let requests = 0
   const seen: { method: string; params: unknown[] }[] = []
   const answer = (method: string, params: unknown[]): { result?: unknown; error?: unknown } => {
     seen.push({ method, params })
@@ -100,7 +111,7 @@ const rpcStub = () => {
       const f = params[0] as { address: string; fromBlock: string; toBlock: string; topics: unknown[] }
       const from = parseInt(f.fromBlock, 16)
       const to = parseInt(f.toBlock, 16)
-      if (to - from > 5_000) return { error: { code: -32005, message: 'query exceeds max block range 5000' } }
+      if (to - from > limit) return { error: { code: -32005, message: `query exceeds max block range ${limit}` } }
       return {
         result: LOGS.filter((l) => {
           const n = parseInt(l.blockNumber, 16)
@@ -112,12 +123,14 @@ const rpcStub = () => {
     return { error: { code: -32601, message: `no ${method}` } }
   }
   const impl = (async (_url: string, init: { body: string }) => {
+    const code = status(requests++)
+    if (code !== 200) return { ok: false, status: code, json: async () => ({}) } as never
     const body = JSON.parse(init.body) as { id: number; method: string; params: unknown[] } | { id: number; method: string; params: unknown[] }[]
     const one = (r: { id: number; method: string; params: unknown[] }) => ({ jsonrpc: '2.0', id: r.id, ...answer(r.method, r.params) })
     const out = Array.isArray(body) ? body.map(one).reverse() : one(body) // batches may come back in any order
     return { ok: true, status: 200, json: async () => out } as never
   }) as unknown as typeof fetch
-  return { impl, seen }
+  return { impl, seen, requests: () => requests }
 }
 
 const intent = (payload: Record<string, unknown>) => `p2f1.k1.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.sig`
@@ -384,4 +397,38 @@ test('statement refunds: P5 pays 10 and 1, the wallet sends 10, 10, 10, 1 - one 
     ],
   )
   assert.equal(toCsv(rows), REFUNDS)
+})
+
+test('statement RPC: getLogs spans go 20 to a batch, and native payers come from one Transfer scan, not a receipt each', async () => {
+  const stub = rpcStub({ limit: 1_000_000 })
+  const rows = await run({ from: tsOf(B1 - 30 * 43_200), to: tsOf(B5 + 10), fetch: stub.impl })
+  assert.deepEqual(rows, await run({ from: tsOf(B1 - 30 * 43_200), to: tsOf(B5 + 10) }), 'the same rows as with a node that refuses wide ranges')
+  assert.ok(stub.requests() <= 40, `30 days in ${stub.requests()} HTTP requests`)
+  assert.equal(stub.seen.filter((c) => c.method === 'eth_getTransactionReceipt').length, 0)
+})
+
+test('statement RPC: a payment whose transfer is not in the logs still gets its payer from the receipt', async () => {
+  const stub = rpcStub()
+  const [row] = await run({ wallet: W4, fetch: stub.impl })
+  assert.equal(row!.payer, addr('5'))
+  assert.deepEqual(stub.seen.filter((c) => c.method === 'eth_getTransactionReceipt').map((c) => c.params[0]), ['0x' + 'cd'.repeat(32)])
+})
+
+test('statement RPC: HTTP 429 is retried with backoff, never taken for "range too large"', async () => {
+  const stub = rpcStub({ limit: 1_000_000, status: (n) => (n === 3 ? 429 : 200) })
+  const rows = await run({ fetch: stub.impl })
+  assert.equal(rows.length, 4)
+  const clean = rpcStub({ limit: 1_000_000 })
+  await run({ fetch: clean.impl })
+  const spans = (x: typeof stub) => x.seen.filter((c) => c.method === 'eth_getLogs').length
+  assert.equal(spans(stub), spans(clean), 'no span was halved')
+  const limited = rpcStub({ status: () => 429 })
+  await assert.rejects(run({ fetch: limited.impl }), /429/)
+  assert.ok(limited.requests() <= 5, `gave up after ${limited.requests()} requests`)
+})
+
+test('statement RPC: a request that hangs is aborted after timeoutMs', { timeout: 5_000 }, async () => {
+  const hang = ((_u: string, init: { signal?: AbortSignal }) =>
+    new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))) as unknown as typeof fetch
+  await assert.rejects(run({ fetch: hang, timeoutMs: 50 }))
 })
