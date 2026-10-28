@@ -272,19 +272,29 @@ test('toCsv: generic, xero and quickbooks', () => {
     toCsv(ROWS, 'xero'),
     [
       'Date,Amount,Payee,Description,Reference',
-      `01/10/2026,9.900000,${P1},"P2Flux payment ${hash('1')}: gross 10.000000, P2Flux fee 0.100000, network fee 0.000000","'-INV,""1"""`,
-      `02/10/2026,-1.000000,${P1},"P2Flux refund? ${hash('4')}: gross -1.000000, P2Flux fee 0.000000, network fee 0.000000",${REF1}`,
+      `01/10/2026,9.90,${P1},"P2Flux payment ${hash('1')}: gross 10.000000, P2Flux fee 0.100000, network fee 0.000000, net 9.900000","'-INV,""1"""`,
+      `02/10/2026,-1.00,${P1},"P2Flux refund? ${hash('4')}: gross -1.000000, P2Flux fee 0.000000, network fee 0.000000, net -1.000000",${REF1}`,
     ].join('\r\n') + '\r\n',
   )
   assert.equal(
     toCsv(ROWS, 'quickbooks'),
     [
       'Date,Description,Amount',
-      `10/01/2026,"P2Flux payment -INV,""1"" ${hash('1')}: gross 10.000000, P2Flux fee 0.100000, network fee 0.000000",9.900000`,
-      `10/02/2026,"P2Flux refund? ${REF1} ${hash('4')}: gross -1.000000, P2Flux fee 0.000000, network fee 0.000000",-1.000000`,
+      `10/01/2026,"P2Flux payment -INV,""1"" ${hash('1')}: gross 10.000000, P2Flux fee 0.100000, network fee 0.000000, net 9.900000",9.90`,
+      `10/02/2026,"P2Flux refund? ${REF1} ${hash('4')}: gross -1.000000, P2Flux fee 0.000000, network fee 0.000000, net -1.000000",-1.00`,
     ].join('\r\n') + '\r\n',
   )
   assert.throws(() => toCsv(ROWS, 'excel' as never), TypeError)
+})
+
+test('toCsv: Xero and QuickBooks amounts have 2 decimals, half away from zero (generic keeps 6)', () => {
+  const nets = ['0.004999', '0.005000', '-0.005000', '-0.004999', '1234.565000', '0.000000']
+  const rows = nets.map((n) => ({ ...ROWS[0]!, merchant_ref: '', gross: n, net: n }))
+  const amounts = (csv: string, col: number) => csv.trim().split('\r\n').slice(1).map((l) => l.split(',').at(col))
+  const want = ['0.00', '0.01', '-0.01', '0.00', '1234.57', '0.00']
+  assert.deepEqual(amounts(toCsv(rows, 'xero'), 1), want)
+  assert.deepEqual(amounts(toCsv(rows, 'quickbooks'), -1), want)
+  assert.deepEqual(amounts(toCsv(rows), -1), nets)
 })
 
 // --- currencies: USD 1:1, EUR and GBP at the ECB rate of the row's day, from the API's /v1/rates -----

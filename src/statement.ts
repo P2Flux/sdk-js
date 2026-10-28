@@ -431,7 +431,9 @@ const AMOUNTS = new Set<keyof StatementRow>(['gross', 'p2flux_fee', 'network_fee
  *   (merchant_ref, else the on-chain reference).
  * - `quickbooks`: the 3-column bank upload - Date (mm/dd/yyyy), Description, Amount (net).
  *
- * The amount booked is `net`, what reached the wallet; gross and fees are in the description. Rows
+ * The amount booked is `net`, what reached the wallet: 6 decimals in generic; Xero and QuickBooks take
+ * 2, so their Amount is `net` rounded to cents (half away from zero, as the currency columns) and the
+ * description keeps the exact 6-decimal gross, fees and net. Rows
  * with `currencies` values: generic adds the value columns; xero and quickbooks keep their layout (amount
  * in USD) and name the EUR/GBP values and the ECB day in the description.
  */
@@ -441,7 +443,9 @@ export function toCsv(rows: StatementRow[], format: 'generic' | 'xero' | 'quickb
   const year = (r: StatementRow) => r.date.slice(0, 4)
   const fx = (r: StatementRow) =>
     r.rate_date ? `${r.value_eur ? `, EUR ${r.value_eur}` : ''}${r.value_gbp ? `, GBP ${r.value_gbp}` : ''} (ECB ${r.rate_date})` : ''
-  const describe = (r: StatementRow) => `${r.tx_hash}: gross ${r.gross}, P2Flux fee ${r.p2flux_fee}, network fee ${r.network_fee}${fx(r)}`
+  const describe = (r: StatementRow) => `${r.tx_hash}: gross ${r.gross}, P2Flux fee ${r.p2flux_fee}, network fee ${r.network_fee}, net ${r.net}${fx(r)}`
+  /** net to cents, half away from zero, as the currency columns. */
+  const amount = (r: StatementRow) => cents(roundDiv(BigInt(r.net.replace('.', '')), 10_000n))
   let lines: string[]
   if (format === 'generic') {
     const columns = [...COLUMNS, ...VALUE_COLUMNS.filter((c) => rows[0]?.[c] !== undefined)]
@@ -449,12 +453,12 @@ export function toCsv(rows: StatementRow[], format: 'generic' | 'xero' | 'quickb
   } else if (format === 'xero') {
     lines = [
       'Date,Amount,Payee,Description,Reference',
-      ...rows.map((r) => [`${day(r)}/${month(r)}/${year(r)}`, r.net, cell(r.payer), cell(`P2Flux ${r.kind} ${describe(r)}`), cell(r.merchant_ref || r.reference)].join(',')),
+      ...rows.map((r) => [`${day(r)}/${month(r)}/${year(r)}`, amount(r), cell(r.payer), cell(`P2Flux ${r.kind} ${describe(r)}`), cell(r.merchant_ref || r.reference)].join(',')),
     ]
   } else if (format === 'quickbooks') {
     lines = [
       'Date,Description,Amount',
-      ...rows.map((r) => [`${month(r)}/${day(r)}/${year(r)}`, cell(`P2Flux ${r.kind} ${r.merchant_ref || r.reference} ${describe(r)}`), r.net].join(',')),
+      ...rows.map((r) => [`${month(r)}/${day(r)}/${year(r)}`, cell(`P2Flux ${r.kind} ${r.merchant_ref || r.reference} ${describe(r)}`), amount(r)].join(',')),
     ]
   } else {
     throw new TypeError(`unknown CSV format: ${format}`)

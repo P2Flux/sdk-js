@@ -158,7 +158,8 @@ writeFileSync('october.csv', toCsv(rows, 'xero'))  // 'generic' | 'xero' | 'quic
 ```
 
 `intents` (optional, decoded locally) fill `merchant_ref`. A refund is marked `refund?`: a transfer
-back to a payer after their payment and no larger than it. The payment may be up to `lookbackDays` (default 90)
+back to a payer after their payment and no larger than what is left of it (a payment is refunded at most
+up to its gross; an exact match is preferred). The payment may be up to `lookbackDays` (default 90)
 before `from`: a September payment refunded in October shows on the October statement as the refund
 only. `statementOn(contracts, { wallet, from, to, rpcUrls })` is the same over contracts and
 endpoints you name, without the built-in network table (for a bundle that must carry one network).
@@ -167,7 +168,8 @@ endpoints you name, without the built-in network table (for a bundle that must c
 row's `net`, 2 decimals) and `rate_date` at the ECB euro reference rate of the row's day (a weekend or
 holiday takes the last published day). The rates come from the API's `/v1/rates` (`apiUrl`, default
 production; only dates are sent) - also as `p2flux.rates({ from, to })`. The generic CSV gets the extra
-columns; Xero and QuickBooks keep their layout (amount in USD) and name EUR/GBP in the description.
+columns; Xero and QuickBooks keep their layout (amount in USD, rounded to cents half away from zero; the
+exact 6-decimal gross, fees and net are in the description) and name EUR/GBP in the description.
 
 ### Redirect checkout: `returnUrl` and `checkoutUrl`
 
