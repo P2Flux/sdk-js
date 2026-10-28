@@ -152,7 +152,8 @@ writeFileSync('october.csv', toCsv(rows, 'xero'))  // 'generic' | 'xero' | 'quic
 `intents` (optional, decoded locally) fill `merchant_ref`. A refund is marked `refund?`: a transfer
 back to a payer after their payment and no larger than it. The payment may be up to `lookbackDays` (default 90)
 before `from`: a September payment refunded in October shows on the October statement as the refund
-only.
+only. `statementOn(contracts, { wallet, from, to, rpcUrls })` is the same over contracts and
+endpoints you name, without the built-in network table (for a bundle that must carry one network).
 
 ### Redirect checkout: `returnUrl` and `checkoutUrl`
 

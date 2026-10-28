@@ -39,6 +39,20 @@ type Contract = {
     address: string;
     deployBlock: number;
 };
+/** A network's settlement contracts and their deploy blocks (the floor of every log search), for `statementOn`. */
+export type StatementContracts = {
+    usdc: string;
+    splitter: string;
+    splitterDeployBlock: number;
+    sponsoredSplitter: string;
+    sponsoredSplitterDeployBlock: number;
+    recurring: string;
+    recurringDeployBlock: number;
+    retired?: {
+        splitters: readonly Contract[];
+        sponsoredSplitters: readonly Contract[];
+    };
+};
 /**
  * Addresses and deploy blocks (the floor of every log search), as pinned in the P2Flux checkout and
  * the API's registry. `retired` lists settlement contracts replaced by a rotation (none yet).
@@ -108,6 +122,13 @@ export type StatementOptions = {
 };
 /** The statement rows for `wallet` between `from` and `to`, oldest first. */
 export declare function statement(options: StatementOptions): Promise<StatementRow[]>;
+/**
+ * `statement()` over contracts and RPC endpoints you name, without the built-in network table - for
+ * a bundle that must carry one network only (the P2Flux checkout passes its pinned network).
+ */
+export declare function statementOn(net: StatementContracts, options: Omit<StatementOptions, 'network' | 'rpcUrls'> & {
+    rpcUrls: string[];
+}): Promise<StatementRow[]>;
 /**
  * The rows as CSV (CRLF line ends).
  *

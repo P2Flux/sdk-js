@@ -15,7 +15,8 @@
   `checkMerchantRef(reference, salt, ref)` proves the commitment with a built-in Keccak-256.
 - **Accounting statement**: new export `@p2flux/sdk/statement` - `statement({ wallet, from, to,
   network?, rpcUrls?, intents?, lookbackDays? })` and `toCsv(rows, 'generic' | 'xero' | 'quickbooks')`, zero
-  dependencies, raw JSON-RPC; refunds of payments up to `lookbackDays` (90) before the window included.
+  dependencies, raw JSON-RPC; refunds of payments up to `lookbackDays` (90) before the window included;
+  `statementOn(contracts, options)` for a bundle that carries one network only.
 - **Webhook delivery history**: `webhookDeliveries({ intent } | { manage })` and
   `redeliverWebhook(token, eventId)`.
 

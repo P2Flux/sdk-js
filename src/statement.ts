@@ -40,6 +40,18 @@ export type StatementRow = {
 
 type Contract = { address: string; deployBlock: number }
 
+/** A network's settlement contracts and their deploy blocks (the floor of every log search), for `statementOn`. */
+export type StatementContracts = {
+  usdc: string
+  splitter: string
+  splitterDeployBlock: number
+  sponsoredSplitter: string
+  sponsoredSplitterDeployBlock: number
+  recurring: string
+  recurringDeployBlock: number
+  retired?: { splitters: readonly Contract[]; sponsoredSplitters: readonly Contract[] }
+}
+
 /**
  * Addresses and deploy blocks (the floor of every log search), as pinned in the P2Flux checkout and
  * the API's registry. `retired` lists settlement contracts replaced by a rotation (none yet).
@@ -209,13 +221,22 @@ type Entry = { block: number; index: number; row: Omit<StatementRow, 'date'>; gr
 export async function statement(options: StatementOptions): Promise<StatementRow[]> {
   const net = NETWORKS[options.network ?? 'base']
   if (!net) throw new TypeError(`unknown network: ${options.network}`)
+  return statementOn(net, { ...options, rpcUrls: options.rpcUrls?.length ? options.rpcUrls : [...net.rpcUrls] })
+}
+
+/**
+ * `statement()` over contracts and RPC endpoints you name, without the built-in network table - for
+ * a bundle that must carry one network only (the P2Flux checkout passes its pinned network).
+ */
+export async function statementOn(net: StatementContracts, options: Omit<StatementOptions, 'network' | 'rpcUrls'> & { rpcUrls: string[] }): Promise<StatementRow[]> {
+  if (!options.rpcUrls.length) throw new TypeError('rpcUrls must name at least one endpoint')
   if (!/^0x[0-9a-fA-F]{40}$/.test(options.wallet)) throw new TypeError('wallet must be a 0x address')
   const fromTs = seconds(options.from)
   const toTs = seconds(options.to)
   if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs > toTs) throw new TypeError('from must be a time before to')
   const lookbackDays = options.lookbackDays ?? 90
   if (!Number.isInteger(lookbackDays) || lookbackDays < 0) throw new TypeError('lookbackDays must be a whole number of days, 0 or more')
-  const rpc = rpcOver(options.rpcUrls?.length ? options.rpcUrls : [...net.rpcUrls], options.fetch ?? globalThis.fetch)
+  const rpc = rpcOver(options.rpcUrls, options.fetch ?? globalThis.fetch)
   const wallet = options.wallet.toLowerCase()
   const walletTopic = topicOf(wallet)
   const refs = merchantRefs(options.intents)
@@ -252,7 +273,7 @@ export async function statement(options: StatementOptions): Promise<StatementRow
     const scan = scanIn(lo, hi)
     // One-time payments through the splitter: the payer is whoever's USDC reached the wallet in that transaction.
     const paid = (
-      await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...net.retired.splitters].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))
+      await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...(net.retired?.splitters ?? [])].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))
     ).flat()
     const receipts = (await rpc(paid.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]]))) as ({ from?: string; logs?: Log[] } | null)[]
     paid.forEach((l, i) => {
@@ -267,7 +288,7 @@ export async function statement(options: StatementOptions): Promise<StatementRow
     // Sponsored: the merchant funds the fee and the fixed network fee out of the amount; the buyer's quoted network fee is on top.
     const sponsored = (
       await Promise.all(
-        [{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...net.retired.sponsoredSplitters].map((c) =>
+        [{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...(net.retired?.sponsoredSplitters ?? [])].map((c) =>
           scan(c, [TOPICS.sponsoredPaid, null, walletTopic]),
         ),
       )

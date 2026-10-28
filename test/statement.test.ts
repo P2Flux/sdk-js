@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { NETWORKS, statement, toCsv, TOPICS, type StatementRow } from '../src/statement.js'
+import { NETWORKS, statement, statementOn, toCsv, TOPICS, type StatementRow } from '../src/statement.js'
 import { keccak256 } from '../src/keccak.js'
 
 const net = NETWORKS['base-sepolia']
@@ -210,6 +210,16 @@ test('statement: September payment, October refund - the October statement shows
   // The payment is ~3.4 days before the window: a 1-day look-back (or none) does not reach it.
   assert.deepEqual(await run({ ...october, lookbackDays: 1 }), [])
   assert.deepEqual(await run({ ...october, lookbackDays: 0 }), [])
+})
+
+test('statementOn: the same rows from contracts and endpoints named by the caller (no network table)', async () => {
+  const { chainId: _c, rpcUrls: _r, retired: _x, ...contracts } = net
+  const window = { wallet: WALLET, from: tsOf(B2), to: tsOf(B3) }
+  assert.deepEqual(
+    await statementOn(contracts, { ...window, rpcUrls: ['https://rpc.example'], fetch: rpcStub().impl }),
+    await run(window),
+  )
+  await assert.rejects(statementOn(contracts, { ...window, rpcUrls: [] }), TypeError)
 })
 
 test('statement: a wallet with nothing in the window is an empty list; bad input is a TypeError', async () => {

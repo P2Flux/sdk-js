@@ -163,6 +163,15 @@ export async function statement(options) {
     const net = NETWORKS[options.network ?? 'base'];
     if (!net)
         throw new TypeError(`unknown network: ${options.network}`);
+    return statementOn(net, { ...options, rpcUrls: options.rpcUrls?.length ? options.rpcUrls : [...net.rpcUrls] });
+}
+/**
+ * `statement()` over contracts and RPC endpoints you name, without the built-in network table - for
+ * a bundle that must carry one network only (the P2Flux checkout passes its pinned network).
+ */
+export async function statementOn(net, options) {
+    if (!options.rpcUrls.length)
+        throw new TypeError('rpcUrls must name at least one endpoint');
     if (!/^0x[0-9a-fA-F]{40}$/.test(options.wallet))
         throw new TypeError('wallet must be a 0x address');
     const fromTs = seconds(options.from);
@@ -172,7 +181,7 @@ export async function statement(options) {
     const lookbackDays = options.lookbackDays ?? 90;
     if (!Number.isInteger(lookbackDays) || lookbackDays < 0)
         throw new TypeError('lookbackDays must be a whole number of days, 0 or more');
-    const rpc = rpcOver(options.rpcUrls?.length ? options.rpcUrls : [...net.rpcUrls], options.fetch ?? globalThis.fetch);
+    const rpc = rpcOver(options.rpcUrls, options.fetch ?? globalThis.fetch);
     const wallet = options.wallet.toLowerCase();
     const walletTopic = topicOf(wallet);
     const refs = merchantRefs(options.intents);
@@ -205,7 +214,7 @@ export async function statement(options) {
     const settlements = async (lo, hi) => {
         const scan = scanIn(lo, hi);
         // One-time payments through the splitter: the payer is whoever's USDC reached the wallet in that transaction.
-        const paid = (await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...net.retired.splitters].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))).flat();
+        const paid = (await Promise.all([{ address: net.splitter, deployBlock: net.splitterDeployBlock }, ...(net.retired?.splitters ?? [])].map((c) => scan(c, [TOPICS.paid, null, walletTopic])))).flat();
         const receipts = (await rpc(paid.map((l) => ['eth_getTransactionReceipt', [l.transactionHash]])));
         paid.forEach((l, i) => {
             const [netUnits = 0n, fee = 0n] = words(l.data);
@@ -214,7 +223,7 @@ export async function statement(options) {
             entries.push(row(l, 'payment', t ? addressOf(t.topics[1]) : (receipt?.from ?? ''), l.topics[1], netUnits + fee, fee, 0n, netUnits));
         });
         // Sponsored: the merchant funds the fee and the fixed network fee out of the amount; the buyer's quoted network fee is on top.
-        const sponsored = (await Promise.all([{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...net.retired.sponsoredSplitters].map((c) => scan(c, [TOPICS.sponsoredPaid, null, walletTopic])))).flat();
+        const sponsored = (await Promise.all([{ address: net.sponsoredSplitter, deployBlock: net.sponsoredSplitterDeployBlock }, ...(net.retired?.sponsoredSplitters ?? [])].map((c) => scan(c, [TOPICS.sponsoredPaid, null, walletTopic])))).flat();
         for (const l of sponsored) {
             const [netUnits = 0n, fee = 0n, , fixed = 0n] = words(l.data);
             entries.push(row(l, 'payment', addressOf(l.topics[3]), l.topics[1], netUnits + fee + fixed, fee, fixed, netUnits));
