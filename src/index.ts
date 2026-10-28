@@ -484,6 +484,18 @@ export type SponsoredPaymentResult = {
   raw: Record<string, unknown>
 }
 
+/**
+ * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
+ * did not publish carries the last published day's rates, named in `rateDate`.
+ */
+export type Rates = {
+  source: 'ECB'
+  base: 'EUR'
+  /** Unix seconds: when P2Flux last downloaded the rates from the ECB. */
+  fetchedAt: number
+  rates: Record<string, { USD: number; GBP: number; rateDate: string }>
+}
+
 /** What a deployment can actually do, per token and per operation. */
 export type Capabilities = {
   chainId: number
@@ -1408,6 +1420,21 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(args.allowanceUnits === undefined ? {} : { allowance_units: args.allowanceUnits }),
         ...(args.permitNonce === undefined ? {} : { permit_nonce: args.permitNonce }),
       })
+    },
+
+    /**
+     * ECB daily euro reference rates for USD and GBP, `from`..`to` (YYYY-MM-DD, at most 366 days), from
+     * P2Flux's own copy. For statements in EUR or GBP; USDC counts as USD 1:1.
+     */
+    async rates(range: { from: string; to: string }): Promise<Rates> {
+      const body = await postOrThrow('/v1/rates', { from: range.from, to: range.to })
+      const days = (body.rates ?? {}) as Record<string, { USD: number; GBP: number; rate_date: string }>
+      return {
+        source: 'ECB',
+        base: 'EUR',
+        fetchedAt: body.fetched_at as number,
+        rates: Object.fromEntries(Object.entries(days).map(([day, r]) => [day, { USD: r.USD, GBP: r.GBP, rateDate: r.rate_date }])),
+      }
     },
 
     /**

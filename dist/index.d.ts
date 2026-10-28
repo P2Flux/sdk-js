@@ -343,6 +343,21 @@ export type SponsoredPaymentResult = {
     blockNumber?: string;
     raw: Record<string, unknown>;
 };
+/**
+ * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
+ * did not publish carries the last published day's rates, named in `rateDate`.
+ */
+export type Rates = {
+    source: 'ECB';
+    base: 'EUR';
+    /** Unix seconds: when P2Flux last downloaded the rates from the ECB. */
+    fetchedAt: number;
+    rates: Record<string, {
+        USD: number;
+        GBP: number;
+        rateDate: string;
+    }>;
+};
 /** What a deployment can actually do, per token and per operation. */
 export type Capabilities = {
     chainId: number;
@@ -794,6 +809,14 @@ export declare function createP2Flux(options: P2FluxOptions): {
         allowanceUnits?: string;
         permitNonce?: string;
     }): Promise<Record<string, unknown>>;
+    /**
+     * ECB daily euro reference rates for USD and GBP, `from`..`to` (YYYY-MM-DD, at most 366 days), from
+     * P2Flux's own copy. For statements in EUR or GBP; USDC counts as USD 1:1.
+     */
+    rates(range: {
+        from: string;
+        to: string;
+    }): Promise<Rates>;
     /**
      * What this deployment supports, before you offer a buyer anything.
      *

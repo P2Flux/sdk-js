@@ -532,6 +532,20 @@ export function createP2Flux(options) {
             });
         },
         /**
+         * ECB daily euro reference rates for USD and GBP, `from`..`to` (YYYY-MM-DD, at most 366 days), from
+         * P2Flux's own copy. For statements in EUR or GBP; USDC counts as USD 1:1.
+         */
+        async rates(range) {
+            const body = await postOrThrow('/v1/rates', { from: range.from, to: range.to });
+            const days = (body.rates ?? {});
+            return {
+                source: 'ECB',
+                base: 'EUR',
+                fetchedAt: body.fetched_at,
+                rates: Object.fromEntries(Object.entries(days).map(([day, r]) => [day, { USD: r.USD, GBP: r.GBP, rateDate: r.rate_date }])),
+            };
+        },
+        /**
          * What this deployment supports, before you offer a buyer anything.
          *
          * Read it once at start-up rather than per checkout: it changes only when the deployment does.
