@@ -15,6 +15,7 @@ test('keccak256 matches the standard vectors, across the 136-byte block boundary
   const utf8 = (s: string) => new TextEncoder().encode(s)
   assert.equal(keccak256(new Uint8Array()), '0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470')
   assert.equal(keccak256(utf8('abc')), '0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45')
+  assert.equal(keccak256(utf8('a'.repeat(135))), '0x34367dc248bbd832f4e3e69dfaac2f92638bd0bbd18f2912ba4ef454919cf446')
   assert.equal(keccak256(utf8('a'.repeat(200))), '0x96ea54061def936c4be90b518992fdc6f12f535068a256229aca54267b4d084d')
   assert.equal(keccak256(utf8('Transfer(address,address,uint256)')), '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef')
 })

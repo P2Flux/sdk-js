@@ -110,6 +110,48 @@ subscriptions with `{ linkId, manage }`) and checks the answer is for YOUR order
 response has no `notifyUrl`, the payment is not watched (the service is at capacity): keep polling as
 above, exactly as without webhooks.
 
+**Signed webhooks.** Every delivery carries `p2flux-signature: t=<unix>,kid=<id>,v1=<Ed25519>` over
+`${t}.${rawBody}`, signed with P2Flux's key (public, in `capabilities().webhookSigningKeys`; no shared
+secret). Check it with the raw body, before parsing:
+
+```ts
+const event = await p2flux.verifyWebhook(rawBody, req.headers['p2flux-signature'])  // throws WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD
+// or in one step: handleNotification(rawBody, { reference, signature: req.headers['p2flux-signature'] })
+```
+
+A signature proves P2Flux sent it, not that money moved: `handleNotification` still asks the API.
+
+**Delivery history.** `webhookDeliveries({ intent })` (or `{ manage }` for a link) lists each event with
+every attempt's time, HTTP status (0 = no answer) and duration, kept 7 days; `redeliverWebhook(token,
+eventId)` sends a pending one now (at most 3 times per event per hour).
+
+### Your own order number: `merchantRef`
+
+Pass `merchantRef` (ASCII letters, digits and `. _ : / # -`, 1-64 characters) to `createPayment`,
+`createPaymentLink`, `createSubscription` or `charge(ref, { merchantRef })`; it comes back on verify,
+recover, link and subscription status, refunds and confirmed notifications. It is signed, not
+encrypted - the buyer can read it - so never personal data. A payment's on-chain `reference` then
+commits to it, provable without P2Flux:
+
+```ts
+const payment = await p2flux.createPayment({ recipient, amount: '25.00', merchantRef: 'INV-1042' })
+checkMerchantRef(payment.reference, payment.referenceSalt!, 'INV-1042')  // true: keccak256("p2flux.merchant_ref.v1" || salt || ref)
+```
+
+### Accounting statement: `@p2flux/sdk/statement`
+
+Every payment, subscription charge and probable refund of a wallet, read from the chain over public
+JSON-RPC (no API, no key), as rows or CSV for Xero or QuickBooks:
+
+```ts
+import { statement, toCsv } from '@p2flux/sdk/statement'
+const rows = await statement({ wallet, from: new Date('2026-10-01'), to: new Date('2026-11-01'), intents })
+writeFileSync('october.csv', toCsv(rows, 'xero'))  // 'generic' | 'xero' | 'quickbooks'
+```
+
+`intents` (optional, decoded locally) fill `merchant_ref`. A refund is marked `refund?`: a transfer
+back to a payer after their payment and no larger than it.
+
 ### Redirect checkout: `returnUrl` and `checkoutUrl`
 
 Prefer sending the buyer to P2Flux's page and getting them back over opening a window? Every create

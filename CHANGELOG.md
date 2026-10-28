@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.15.0 - unreleased
+
+### Added
+
+- **Signed webhooks.** `verifyWebhook(rawBody, header, { keys?, toleranceSec = 300, now? })` checks the
+  `p2flux-signature` header (Ed25519 over `${t}.${rawBody}`, WebCrypto, no dependency) and returns the
+  event, or throws `WEBHOOK_SIGNATURE_INVALID` / `WEBHOOK_TOO_OLD`. Keys default to the API's own
+  (`capabilities().webhookSigningKeys`), fetched once and cached. `handleNotification` takes an optional
+  `signature` (plus `keys` / `toleranceSec`) and refuses a bad one as `confirmed: false`.
+- **merchant_ref.** `merchantRef` on `createPayment`, `createPaymentLink`, `createSubscription` and
+  `charge(ref, { merchantRef })`; `merchantRef` / `referenceSalt` read back on create, resolve, verify,
+  recover, link and subscription status, `recoverCharge`, `verifyRefund` and confirmed notifications.
+  `checkMerchantRef(reference, salt, ref)` proves the commitment with a built-in Keccak-256.
+- **Accounting statement**: new export `@p2flux/sdk/statement` - `statement({ wallet, from, to,
+  network?, rpcUrls?, intents? })` and `toCsv(rows, 'generic' | 'xero' | 'quickbooks')`, zero
+  dependencies, raw JSON-RPC.
+- **Webhook delivery history**: `webhookDeliveries({ intent } | { manage })` and
+  `redeliverWebhook(token, eventId)`.
+
+All additive; needs an API with these features (an older one refuses `merchant_ref`).
+
 ## 0.14.0 - 2026-10-27
 
 ### Added
