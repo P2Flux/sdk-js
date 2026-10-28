@@ -1300,11 +1300,13 @@ export function createP2Flux(options: P2FluxOptions) {
     async verifyWebhook(rawBody: string | Uint8Array, header: string, options: VerifyWebhookOptions = {}): Promise<Record<string, unknown>> {
       const bytes = typeof rawBody === 'string' ? new TextEncoder().encode(rawBody) : rawBody
       const keys = options.keys
+      const tolerance = options.toleranceSec ?? 300
+      if (typeof tolerance !== 'number' || !Number.isFinite(tolerance) || tolerance < 0) throw new TypeError('toleranceSec must be a finite number of seconds, 0 or more')
       const failure = await checkSignature(
         bytes,
         header,
         keys ? async (kid) => (Object.hasOwn(keys, kid) ? keys[kid] : undefined) : signingKey,
-        options.toleranceSec ?? 300,
+        tolerance,
         options.now ?? Math.floor(Date.now() / 1000),
       )
       if (failure) throw new P2FluxError(failure, 'INVALID_REQUEST')

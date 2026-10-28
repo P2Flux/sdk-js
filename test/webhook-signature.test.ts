@@ -96,3 +96,10 @@ test('handleNotification: with `signature`, a forged or stale body is refused be
   assert.equal(passed.reason, 'NOT_YOUR_ORDER')
   assert.equal(passed.eventId, 'evt_2')
 })
+
+test('verifyWebhook: toleranceSec must be a finite number >= 0 (TypeError otherwise)', async () => {
+  for (const bad of [NaN, Infinity, -1, '300']) {
+    await assert.rejects(offline.verifyWebhook(BODY, HEADER, { keys: KEYS, now: T, toleranceSec: bad as never }), TypeError, String(bad))
+  }
+  assert.ok(await offline.verifyWebhook(BODY, HEADER, { keys: KEYS, now: T, toleranceSec: 0 }))
+})
