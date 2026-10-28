@@ -21,7 +21,7 @@ test('dist matches a fresh build of src', () => {
   try {
     execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json', '--outDir', out], { cwd: root, stdio: 'pipe' })
 
-    for (const file of ['index.js', 'index.d.ts', 'paywall.js', 'paywall.d.ts', 'keccak.js', 'keccak.d.ts']) {
+    for (const file of ['index.js', 'index.d.ts', 'paywall.js', 'paywall.d.ts', 'keccak.js', 'keccak.d.ts', 'statement.js', 'statement.d.ts']) {
       assert.equal(
         readFileSync(join(out, file), 'utf8'),
         readFileSync(join(root, 'dist', file), 'utf8'),
@@ -49,7 +49,7 @@ test('importing the package has no side effects', () => {
 })
 
 test('dist has no top-level statement that could run at import', () => {
-  const dist = ['index.js', 'keccak.js'].map((file) => readFileSync(join(root, 'dist', file), 'utf8')).join('\n')
+  const dist = ['index.js', 'keccak.js', 'statement.js'].map((file) => readFileSync(join(root, 'dist', file), 'utf8')).join('\n')
   const topLevel = dist.split('\n').filter((line) => line.length > 0 && !/^[\s})\]]/.test(line))
   // A relative import is a declaration too: its module is held to the same rule (keccak.js below).
   const offenders = topLevel.filter((line) => !/^(const |export |class |function |import \{[^}]*\} from '\.\/[a-z]+\.js';$|\/\*|\*|\/\/)/.test(line))

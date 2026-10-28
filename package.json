@@ -45,6 +45,10 @@
     "./paywall": {
       "types": "./dist/paywall.d.ts",
       "default": "./dist/paywall.js"
+    },
+    "./statement": {
+      "types": "./dist/statement.d.ts",
+      "default": "./dist/statement.js"
     }
   },
   "publishConfig": {
