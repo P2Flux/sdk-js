@@ -15,6 +15,8 @@
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
 
+import { keccak256 } from './keccak.js'
+
 export type ChargeStatus =
   | 'CHARGED'
   | 'ALREADY_CHARGED'
@@ -161,6 +163,8 @@ export type SubscriptionStatus = {
   periodEnd: string | null
   nextPeriodAt: string | null
   allowanceUnlimited: boolean
+  /** Present when created with `merchantRef`. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -193,6 +197,9 @@ export type RecoveredPayment = {
   amount?: string
   /** The block the answer was computed at. A not-found is only true as of this height. */
   asOfBlock?: string
+  /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
+  merchantRef?: string
+  referenceSalt?: string
   raw: Record<string, unknown>
 }
 
@@ -297,6 +304,8 @@ export type RefundVerification = {
   action: MerchantAction
   txHash?: string
   amount?: string
+  /** Present when the original payment was created with `merchantRef`. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -348,6 +357,13 @@ export type PaymentTerms = {
    * cannot be refunded automatically (`refundable: false`). Native gas only.
    */
   privatePayment?: 'hinkal'
+  /**
+   * Optional: your own order or invoice number, echoed by verify, recover, webhooks and refunds.
+   * ASCII letters, digits and `. _ : / # -`, 1-64 characters (no spaces, no `@`). Signed, not
+   * encrypted: the buyer can read it, so never personal data. The on-chain reference then commits to
+   * it (`referenceSalt`, `checkMerchantRef`). Needs an API with merchant_ref (older ones refuse it).
+   */
+  merchantRef?: string
 }
 
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
@@ -419,6 +435,9 @@ export type PaymentIntent = {
    * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
    */
   checkoutUrl?: string
+  /** Present when created with `merchantRef`, with the salt that proves `reference` commits to it (`checkMerchantRef`). */
+  merchantRef?: string
+  referenceSalt?: string
   raw: Record<string, unknown>
 }
 
@@ -441,6 +460,8 @@ export type ResolvedPayment = {
   returnUrl?: string
   /** Present when the payment offers "Pay privately with Hinkal". */
   privatePayment?: 'hinkal'
+  /** Present when created with `merchantRef`. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -533,6 +554,9 @@ export type PaymentVerification =
        * wallet; `unknown` - no list was loaded at that moment. Absent on older API builds.
        */
       screening?: 'clear' | 'sanctioned' | 'unknown'
+      /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
+      merchantRef?: string
+      referenceSalt?: string
       raw: Record<string, unknown>
     }
   | {
@@ -564,6 +588,8 @@ export type SubscriptionTerms = {
   end?: number
   /** Standing allowance the checkout asks for. Omit for unlimited. */
   allowance?: AllowanceMode
+  /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
+  merchantRef?: string
 }
 
 export type SubscriptionSetup = {
@@ -577,6 +603,8 @@ export type SubscriptionSetup = {
   amount: string
   /** Ties a returned capability back to THIS checkout - compare before attaching it to an order. */
   salt: string
+  /** Present when created with `merchantRef`. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -601,6 +629,8 @@ export type ResolvedSubscription = {
   typedData: Record<string, unknown>
   /** Only when resolved in `payment_token` mode: what the customer signs instead of approving. */
   sponsorship?: SubscriptionSponsorship
+  /** Present when created with `merchantRef`. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -777,6 +807,8 @@ export type PaymentLinkTerms = {
   returnUrl?: string
   /** `once` and `reusable` links (not subscriptions), Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
   privatePayment?: 'hinkal'
+  /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
+  merchantRef?: string
 }
 
 /** A link's terms, as the API states them. */
@@ -799,6 +831,8 @@ export type PaymentLinkTermsView = {
   period?: number
   periods?: number
   suspendAfterDays?: number
+  /** Present when created with `merchantRef`. */
+  merchantRef?: string
 }
 
 export type PaymentLink = PaymentLinkTermsView & {
@@ -829,6 +863,9 @@ export type NotificationResult = {
   reason?: string
   /** payment.paid: the API's own verdict. */
   payment?: PaymentVerification
+  /** payment.paid confirmed, created with `merchantRef`: from the verdict (never from the event body). */
+  merchantRef?: string
+  referenceSalt?: string
   /** subscription.*: the subscriber as the manage view shows it now. */
   subscriber?: PaymentLinkSubscriber
 }
@@ -897,6 +934,7 @@ const linkTerms = (b: Record<string, unknown>): PaymentLinkTermsView => ({
   ...(b.period ? { period: b.period as number } : {}),
   ...(b.periods ? { periods: b.periods as number } : {}),
   ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days as number } : {}),
+  ...(b.merchant_ref ? { merchantRef: b.merchant_ref as string } : {}),
 })
 
 const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
@@ -1025,6 +1063,34 @@ function intentReference(intent: string): string {
   } catch {
     return ''
   }
+}
+
+/** `merchant_ref` / `reference_salt` from an answer, in camelCase; nothing when absent. */
+const merchantRefOf = (b: Record<string, unknown>) => ({
+  ...(typeof b.merchant_ref === 'string' ? { merchantRef: b.merchant_ref } : {}),
+  ...(typeof b.reference_salt === 'string' ? { referenceSalt: b.reference_salt } : {}),
+})
+
+/** The rule the API applies to a merchant_ref. */
+export const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/
+
+const hexBytes = (hex: string) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16))
+
+/**
+ * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
+ * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
+ * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ */
+export function checkMerchantRef(reference: string, salt: string, merchantRef: string): boolean {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(reference) || !/^0x[0-9a-fA-F]{64}$/.test(salt) || !MERCHANT_REF.test(merchantRef)) return false
+  const domain = new TextEncoder().encode('p2flux.merchant_ref.v1')
+  const ref = new TextEncoder().encode(merchantRef)
+  const bytes = new Uint8Array(domain.length + 32 + ref.length)
+  bytes.set(domain)
+  bytes.set(hexBytes(salt), domain.length)
+  bytes.set(ref, domain.length + 32)
+  return keccak256(bytes) === reference.toLowerCase()
 }
 
 const fromBase64Url = (s: string) => {
@@ -1216,6 +1282,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
         ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
+        ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
       })
       const pay = (body.pay ?? {}) as Record<string, unknown>
       return {
@@ -1235,6 +1302,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
         ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
         ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}),
+        ...merchantRefOf(body),
         raw: body,
       }
     },
@@ -1258,6 +1326,7 @@ export function createP2Flux(options: P2FluxOptions) {
           : { networkFeeQuote: networkFeeQuote(body.network_fee_quote as Record<string, unknown>) }),
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
         ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
+        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
         raw: body,
       }
     },
@@ -1391,6 +1460,7 @@ export function createP2Flux(options: P2FluxOptions) {
             ? {}
             : { gasPaymentMode: body.gas_payment_mode as GasPaymentMode }),
           ...(body.screening === undefined ? {} : { screening: body.screening as 'clear' | 'sanctioned' | 'unknown' }),
+          ...merchantRefOf(body),
           raw: body,
         }
       }
@@ -1413,6 +1483,7 @@ export function createP2Flux(options: P2FluxOptions) {
         period: terms.period,
         ...(terms.end === undefined ? {} : { end: terms.end }),
         ...(terms.allowance === undefined ? {} : { allowance: terms.allowance }),
+        ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
       })
       return {
         setupToken: body.setup_token as string,
@@ -1421,6 +1492,7 @@ export function createP2Flux(options: P2FluxOptions) {
         contract: body.contract as string,
         amount: body.amount as string,
         salt: body.salt as string,
+        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
         raw: body,
       }
     },
@@ -1469,6 +1541,7 @@ export function createP2Flux(options: P2FluxOptions) {
                 networkFeeAuthorization: body.network_fee_authorization as Record<string, unknown>,
               },
             }),
+        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
         raw: body,
       }
     },
@@ -1561,6 +1634,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
         ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
+        ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
       })
       return {
         ...linkTerms(body),
@@ -1650,6 +1724,7 @@ export function createP2Flux(options: P2FluxOptions) {
         periodEnd: body.period_end as string | null,
         nextPeriodAt: body.next_period_at as string | null,
         allowanceUnlimited: body.allowance_unlimited as boolean,
+        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
         raw: body,
       }
     },
@@ -1690,6 +1765,7 @@ export function createP2Flux(options: P2FluxOptions) {
         action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS') as MerchantAction,
         amount: body.amount as string | undefined,
         asOfBlock: body.as_of_block as string | undefined,
+        ...merchantRefOf(body),
         raw: body,
       }
     },
@@ -1912,6 +1988,7 @@ export function createP2Flux(options: P2FluxOptions) {
          * CHARGE response uses - meant both were silently undefined on every successful refund. */
         txHash: body.refund_tx_hash as string | undefined,
         amount: body.refund_amount as string | undefined,
+        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
         raw: body,
       }
     },
@@ -2021,7 +2098,15 @@ export function createP2Flux(options: P2FluxOptions) {
         }
         // The reference that counts is the API's, from the verdict - not the one in the notification.
         if (!ours(verdict.reference)) return no('NOT_YOUR_ORDER', { payment: verdict })
-        return { confirmed: true, eventId, type, dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`, payment: verdict }
+        return {
+          confirmed: true,
+          eventId,
+          type,
+          dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`,
+          payment: verdict,
+          ...(verdict.merchantRef ? { merchantRef: verdict.merchantRef } : {}),
+          ...(verdict.referenceSalt ? { referenceSalt: verdict.referenceSalt } : {}),
+        }
       }
 
       if (type === 'subscription.charged' || type === 'subscription.updated') {

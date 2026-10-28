@@ -14,6 +14,7 @@
  * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
+import { keccak256 } from './keccak.js';
 /** Wire shape: `txHash` is `tx_hash`, and the settlement key stays whatever the caller passed. */
 const refundBody = (original) => {
     const { txHash, periodIndex, ...rest } = original;
@@ -138,6 +139,7 @@ const linkTerms = (b) => ({
     ...(b.period ? { period: b.period } : {}),
     ...(b.periods ? { periods: b.periods } : {}),
     ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days } : {}),
+    ...(b.merchant_ref ? { merchantRef: b.merchant_ref } : {}),
 });
 const linkPayment = (p) => ({
     txHash: p.tx_hash,
@@ -228,6 +230,31 @@ function intentReference(intent) {
     catch {
         return '';
     }
+}
+/** `merchant_ref` / `reference_salt` from an answer, in camelCase; nothing when absent. */
+const merchantRefOf = (b) => ({
+    ...(typeof b.merchant_ref === 'string' ? { merchantRef: b.merchant_ref } : {}),
+    ...(typeof b.reference_salt === 'string' ? { referenceSalt: b.reference_salt } : {}),
+});
+/** The rule the API applies to a merchant_ref. */
+export const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/;
+const hexBytes = (hex) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16));
+/**
+ * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
+ * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
+ * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ */
+export function checkMerchantRef(reference, salt, merchantRef) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(reference) || !/^0x[0-9a-fA-F]{64}$/.test(salt) || !MERCHANT_REF.test(merchantRef))
+        return false;
+    const domain = new TextEncoder().encode('p2flux.merchant_ref.v1');
+    const ref = new TextEncoder().encode(merchantRef);
+    const bytes = new Uint8Array(domain.length + 32 + ref.length);
+    bytes.set(domain);
+    bytes.set(hexBytes(salt), domain.length);
+    bytes.set(ref, domain.length + 32);
+    return keccak256(bytes) === reference.toLowerCase();
 }
 const fromBase64Url = (s) => {
     if (!/^[A-Za-z0-9_-]*$/.test(s))
@@ -410,6 +437,7 @@ export function createP2Flux(options) {
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
+                ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -429,6 +457,7 @@ export function createP2Flux(options) {
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
                 ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
                 ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
+                ...merchantRefOf(body),
                 raw: body,
             };
         },
@@ -451,6 +480,7 @@ export function createP2Flux(options) {
                     : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
                 ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
+                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -568,6 +598,7 @@ export function createP2Flux(options) {
                         ? {}
                         : { gasPaymentMode: body.gas_payment_mode }),
                     ...(body.screening === undefined ? {} : { screening: body.screening }),
+                    ...merchantRefOf(body),
                     raw: body,
                 };
             }
@@ -589,6 +620,7 @@ export function createP2Flux(options) {
                 period: terms.period,
                 ...(terms.end === undefined ? {} : { end: terms.end }),
                 ...(terms.allowance === undefined ? {} : { allowance: terms.allowance }),
+                ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
             });
             return {
                 setupToken: body.setup_token,
@@ -597,6 +629,7 @@ export function createP2Flux(options) {
                 contract: body.contract,
                 amount: body.amount,
                 salt: body.salt,
+                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -641,6 +674,7 @@ export function createP2Flux(options) {
                             networkFeeAuthorization: body.network_fee_authorization,
                         },
                     }),
+                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -720,6 +754,7 @@ export function createP2Flux(options) {
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
+                ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
             });
             return {
                 ...linkTerms(body),
@@ -803,6 +838,7 @@ export function createP2Flux(options) {
                 periodEnd: body.period_end,
                 nextPeriodAt: body.next_period_at,
                 allowanceUnlimited: body.allowance_unlimited,
+                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -840,6 +876,7 @@ export function createP2Flux(options) {
                 action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS'),
                 amount: body.amount,
                 asOfBlock: body.as_of_block,
+                ...merchantRefOf(body),
                 raw: body,
             };
         },
@@ -1041,6 +1078,7 @@ export function createP2Flux(options) {
                  * CHARGE response uses - meant both were silently undefined on every successful refund. */
                 txHash: body.refund_tx_hash,
                 amount: body.refund_amount,
+                ...(body.merchant_ref ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -1157,7 +1195,15 @@ export function createP2Flux(options) {
                 // The reference that counts is the API's, from the verdict - not the one in the notification.
                 if (!ours(verdict.reference))
                     return no('NOT_YOUR_ORDER', { payment: verdict });
-                return { confirmed: true, eventId, type, dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`, payment: verdict };
+                return {
+                    confirmed: true,
+                    eventId,
+                    type,
+                    dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`,
+                    payment: verdict,
+                    ...(verdict.merchantRef ? { merchantRef: verdict.merchantRef } : {}),
+                    ...(verdict.referenceSalt ? { referenceSalt: verdict.referenceSalt } : {}),
+                };
             }
             if (type === 'subscription.charged' || type === 'subscription.updated') {
                 if (!expect.manage || !expect.linkId)

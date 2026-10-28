@@ -46,6 +46,8 @@ export type SubscriptionStatus = {
     periodEnd: string | null;
     nextPeriodAt: string | null;
     allowanceUnlimited: boolean;
+    /** Present when created with `merchantRef`. */
+    merchantRef?: string;
     raw: Record<string, unknown>;
 };
 /** Calldata for the customer's own wallet to send. P2Flux cannot revoke wallet authority. */
@@ -76,6 +78,9 @@ export type RecoveredPayment = {
     amount?: string;
     /** The block the answer was computed at. A not-found is only true as of this height. */
     asOfBlock?: string;
+    /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
+    merchantRef?: string;
+    referenceSalt?: string;
     raw: Record<string, unknown>;
 };
 /**
@@ -181,6 +186,8 @@ export type RefundVerification = {
     action: MerchantAction;
     txHash?: string;
     amount?: string;
+    /** Present when the original payment was created with `merchantRef`. */
+    merchantRef?: string;
     raw: Record<string, unknown>;
 };
 /** Terms for a one-time payment: who gets paid, and how much USDC (decimal string, "12.50"). */
@@ -215,6 +222,13 @@ export type PaymentTerms = {
      * cannot be refunded automatically (`refundable: false`). Native gas only.
      */
     privatePayment?: 'hinkal';
+    /**
+     * Optional: your own order or invoice number, echoed by verify, recover, webhooks and refunds.
+     * ASCII letters, digits and `. _ : / # -`, 1-64 characters (no spaces, no `@`). Signed, not
+     * encrypted: the buyer can read it, so never personal data. The on-chain reference then commits to
+     * it (`referenceSalt`, `checkMerchantRef`). Needs an API with merchant_ref (older ones refuse it).
+     */
+    merchantRef?: string;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -283,6 +297,9 @@ export type PaymentIntent = {
      * older APIs. A self-hosted checkout builds its own address with `checkoutLink()` instead.
      */
     checkoutUrl?: string;
+    /** Present when created with `merchantRef`, with the salt that proves `reference` commits to it (`checkMerchantRef`). */
+    merchantRef?: string;
+    referenceSalt?: string;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms a checkout should display, read back from an intent. */
@@ -304,6 +321,8 @@ export type ResolvedPayment = {
     returnUrl?: string;
     /** Present when the payment offers "Pay privately with Hinkal". */
     privatePayment?: 'hinkal';
+    /** Present when created with `merchantRef`. */
+    merchantRef?: string;
     raw: Record<string, unknown>;
 };
 /** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
@@ -394,6 +413,9 @@ export type PaymentVerification = {
      * wallet; `unknown` - no list was loaded at that moment. Absent on older API builds.
      */
     screening?: 'clear' | 'sanctioned' | 'unknown';
+    /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
+    merchantRef?: string;
+    referenceSalt?: string;
     raw: Record<string, unknown>;
 } | {
     valid: false;
@@ -424,6 +446,8 @@ export type SubscriptionTerms = {
     end?: number;
     /** Standing allowance the checkout asks for. Omit for unlimited. */
     allowance?: AllowanceMode;
+    /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
+    merchantRef?: string;
 };
 export type SubscriptionSetup = {
     /** Signed setup token. Put it in the checkout link fragment: `#/subscribe/<setup_token>`. */
@@ -436,6 +460,8 @@ export type SubscriptionSetup = {
     amount: string;
     /** Ties a returned capability back to THIS checkout - compare before attaching it to an order. */
     salt: string;
+    /** Present when created with `merchantRef`. */
+    merchantRef?: string;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms plus the exact EIP-712 payload the customer's wallet signs. */
@@ -459,6 +485,8 @@ export type ResolvedSubscription = {
     typedData: Record<string, unknown>;
     /** Only when resolved in `payment_token` mode: what the customer signs instead of approving. */
     sponsorship?: SubscriptionSponsorship;
+    /** Present when created with `merchantRef`. */
+    merchantRef?: string;
     raw: Record<string, unknown>;
 };
 export type FinalizedSubscription = {
@@ -537,6 +565,8 @@ export type PaymentLinkTerms = {
     returnUrl?: string;
     /** `once` and `reusable` links (not subscriptions), Base only: also offer "Pay privately with Hinkal" (see `PaymentTerms.privatePayment`). */
     privatePayment?: 'hinkal';
+    /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
+    merchantRef?: string;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -558,6 +588,8 @@ export type PaymentLinkTermsView = {
     period?: number;
     periods?: number;
     suspendAfterDays?: number;
+    /** Present when created with `merchantRef`. */
+    merchantRef?: string;
 };
 export type PaymentLink = PaymentLinkTermsView & {
     /** The public link token. Send `checkoutLink('link', link)` to buyers. */
@@ -586,6 +618,9 @@ export type NotificationResult = {
     reason?: string;
     /** payment.paid: the API's own verdict. */
     payment?: PaymentVerification;
+    /** payment.paid confirmed, created with `merchantRef`: from the verdict (never from the event body). */
+    merchantRef?: string;
+    referenceSalt?: string;
     /** subscription.*: the subscriber as the manage view shows it now. */
     subscriber?: PaymentLinkSubscriber;
 };
@@ -665,6 +700,15 @@ export type SubscriptionSponsorship = {
     allowancePermit: Record<string, unknown>;
     networkFeeAuthorization: Record<string, unknown>;
 };
+/** The rule the API applies to a merchant_ref. */
+export declare const MERCHANT_REF: RegExp;
+/**
+ * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
+ * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
+ * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ */
+export declare function checkMerchantRef(reference: string, salt: string, merchantRef: string): boolean;
 export declare function createP2Flux(options: P2FluxOptions): {
     /**
      * Check a webhook's `p2flux-signature` header and return the parsed event.
