@@ -67,6 +67,19 @@ const LOGS: Log[] = [
   // Before the window: must not appear.
   log(net.splitter, [TOPICS.paid, hash('c'), topic(WALLET), topic(net.usdc)], data(1n, 0n), 46_000_000, hash('8')),
 ]
+// The refund case (see "statement refunds" below): wallet W2, payer P5.
+const W2 = addr('7')
+const P5 = addr('8')
+const REF5 = hash('5')
+const REF6 = hash('6')
+LOGS.push(
+  log(net.sponsoredSplitter, [TOPICS.sponsoredPaid, REF5, topic(W2), topic(P5)], data(9_900_000n, 100_000n, 0n, 0n), 46_440_100, hash('c')),
+  log(net.sponsoredSplitter, [TOPICS.sponsoredPaid, REF6, topic(W2), topic(P5)], data(990_000n, 10_000n, 0n, 0n), 46_440_200, hash('d')),
+  transfer(W2, P5, 10_000_000n, 46_441_100, hash('e')),
+  transfer(W2, P5, 10_000_000n, 46_441_200, hash('f')),
+  transfer(W2, P5, 10_000_000n, 46_441_300, hash('0')),
+  transfer(W2, P5, 1_000_000n, 46_441_400, '0x' + 'ab'.repeat(32)),
+)
 const RECEIPTS: Record<string, unknown> = {
   [hash('9')]: { from: P4, logs: [transfer(P4, WALLET, 19_800_000n, BS, hash('9'), 1)] },
   [hash('1')]: { from: addr('5'), logs: [transfer(P1, WALLET, 9_900_000n, B1, hash('1'), 1), transfer(P1, addr('f'), 100_000n, B1, hash('1'), 2)] },
@@ -343,4 +356,22 @@ test('client.rates: GET-equivalent POST /v1/rates, camelCase', async () => {
   const r = await createP2Flux({ apiUrl: 'https://api.p2flux.example', fetch: impl }).rates({ from: '2026-10-24', to: '2026-10-24' })
   assert.deepEqual(calls, [{ path: '/v1/rates', body: { from: '2026-10-24', to: '2026-10-24' } }])
   assert.deepEqual(r, { source: 'ECB', base: 'EUR', fetchedAt: 7, rates: { '2026-10-24': { USD: 1.1193, GBP: 0.83728, rateDate: '2026-10-23' } } })
+})
+
+// --- refunds: each payment can be refunded only up to its gross, the exact-amount payment first ---------
+/** Identical copy in sdk-php tests/fixtures. */
+const REFUNDS = readFileSync(new URL('./fixtures/statement-refunds.csv', import.meta.url), 'utf8')
+
+test('statement refunds: P5 pays 10 and 1, the wallet sends 10, 10, 10, 1 - one -10 and one -1, the other 10s are not refunds', async () => {
+  const rows = await run({ wallet: W2 })
+  assert.deepEqual(
+    rows.map((r) => [r.kind, r.reference, r.net]),
+    [
+      ['payment', REF5, '9.900000'],
+      ['payment', REF6, '0.990000'],
+      ['refund?', REF5, '-10.000000'],
+      ['refund?', REF6, '-1.000000'],
+    ],
+  )
+  assert.equal(toCsv(rows), REFUNDS)
 })

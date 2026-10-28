@@ -8,8 +8,8 @@
  * No API call, no key, no dependency: raw JSON-RPC to public endpoints (or your own), so the numbers
  * do not depend on P2Flux being up - or honest. One row per settlement to the wallet (one-time
  * payments through the splitter and the sponsored splitter, subscription charges) and per probable
- * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than it
- * (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
+ * refund: a USDC transfer from the wallet back to a payer, after their payment and no larger than what is
+ * left of it (each payment is refunded at most up to its gross) (`kind: 'refund?'` - a transfer cannot say why it was sent, so it is marked as a guess). The payment
  * may be up to `lookbackDays` (default 90) before `from`: a September payment refunded in October is
  * on the October statement as a refund, without the September payment as a row. Amounts are decimal
  * USDC; a refund is negative.
@@ -337,15 +337,21 @@ export async function statementOn(net: StatementContracts, options: Omit<Stateme
     const lookFrom = Math.max(0, (await blockNear(rpc, fromTs - lookbackDays * 86_400, latest)) - 5)
     if (lookFrom < fromBlock) await settlements(lookFrom, fromBlock - 1)
   }
+  /* Each payment can be refunded up to its gross, once: a transfer matches only a payment with that much
+   * left (the one with exactly that much left first, else the most recent with room), and uses it up. */
+  const room = new Map(entries.map((e) => [e, e.gross]))
   const settled = entries.slice()
-  for (const l of sent) {
+  for (const l of sent.slice().sort((x, y) => at(x).block - at(y).block || at(x).index - at(y).index)) {
     const to = addressOf(l.topics[2]!)
     const amount = words(l.data)[0] ?? 0n
     const { block: b, index } = at(l)
-    const original = settled
-      .filter((e) => e.row.payer === to && (e.block < b || (e.block === b && e.index < index)) && e.gross >= amount)
-      .sort((x, y) => y.block - x.block || y.index - x.index)[0]
-    if (original) entries.push(row(l, 'refund?', to, original.row.reference, -amount, 0n, 0n, -amount))
+    const candidates = settled
+      .filter((e) => e.row.payer === to && (e.block < b || (e.block === b && e.index < index)) && room.get(e)! >= amount)
+      .sort((x, y) => y.block - x.block || y.index - x.index)
+    const original = candidates.find((e) => room.get(e) === amount) ?? candidates[0]
+    if (!original) continue
+    room.set(original, room.get(original)! - amount)
+    entries.push(row(l, 'refund?', to, original.row.reference, -amount, 0n, 0n, -amount))
   }
 
   // Dates, one batched read per distinct block (the look-back's payments are below the window: no rows).
