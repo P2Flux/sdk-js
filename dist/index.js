@@ -240,15 +240,18 @@ const merchantRefOf = (b) => ({
 export const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/;
 /**
  * The exact text a receiving wallet signs with `personal_sign` for `createMerchantToken()`. `chainId` is
- * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent.
+ * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent;
+ * `apiUrl` the API you send it to (the same `apiUrl` as `createP2Flux`) - its origin is in the text, so
+ * the signature is good at that deployment only.
  */
-export function merchantTokenMessage(chainId, wallet, issuedAt) {
+export function merchantTokenMessage(chainId, wallet, issuedAt, apiUrl) {
     return [
         'P2Flux merchant token',
         '',
         'This signature only raises your P2Flux API limits. It moves no funds and approves nothing.',
         '',
         `Wallet: ${wallet.toLowerCase()}`,
+        `API: ${new URL(apiUrl).origin}`,
         `Chain ID: ${chainId}`,
         `Issued at: ${issuedAt}`,
     ].join('\n');
@@ -567,7 +570,7 @@ export function createP2Flux(options) {
         },
         /**
          * Prove your receiving wallet once for higher limits: sign `merchantTokenMessage(chainId, wallet,
-         * issuedAt)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
+         * issuedAt, apiUrl)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
          * `createP2Flux({ merchantToken })`. Valid 30 days; it moves no money and opens no data.
          */
         async createMerchantToken(input) {

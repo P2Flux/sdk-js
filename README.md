@@ -189,7 +189,7 @@ import { createP2Flux, merchantTokenMessage } from '@p2flux/sdk'
 
 const { chainId } = await p2flux.capabilities()
 const issuedAt = Math.floor(Date.now() / 1000)
-const signature = await wallet.signMessage({ message: merchantTokenMessage(chainId, recipient, issuedAt) })
+const signature = await wallet.signMessage({ message: merchantTokenMessage(chainId, recipient, issuedAt, 'https://api.p2flux.com') })
 const { merchantToken } = await p2flux.createMerchantToken({ wallet: recipient, signature, issuedAt })
 const merchant = createP2Flux({ apiUrl: 'https://api.p2flux.com', merchantToken })
 ```

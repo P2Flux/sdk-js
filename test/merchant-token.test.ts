@@ -4,10 +4,12 @@ import { createP2Flux, merchantTokenMessage } from '../src/index.js'
 
 test('merchantTokenMessage is the exact text the API verifies (same as sdk-php and core)', () => {
   assert.equal(
-    merchantTokenMessage(8453, '0xAbCdEf0000000000000000000000000000000001', 1_800_000_000),
+    merchantTokenMessage(8453, '0xAbCdEf0000000000000000000000000000000001', 1_800_000_000, 'https://API.p2flux.com/'),
     'P2Flux merchant token\n\nThis signature only raises your P2Flux API limits. It moves no funds and approves nothing.\n\n' +
-      'Wallet: 0xabcdef0000000000000000000000000000000001\nChain ID: 8453\nIssued at: 1800000000',
+      'Wallet: 0xabcdef0000000000000000000000000000000001\nAPI: https://api.p2flux.com\nChain ID: 8453\nIssued at: 1800000000',
   )
+  // The API line is the origin of apiUrl: one deployment's signature is refused by another.
+  assert.match(merchantTokenMessage(84532, '0x01', 1, 'https://api-test.p2flux.com:8443/v1'), /\nAPI: https:\/\/api-test\.p2flux\.com:8443\n/)
 })
 
 test('createMerchantToken posts the proof; merchantToken / partnerKey ride on every request as headers', async () => {

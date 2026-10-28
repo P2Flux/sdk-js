@@ -756,9 +756,11 @@ export type SubscriptionSponsorship = {
 export declare const MERCHANT_REF: RegExp;
 /**
  * The exact text a receiving wallet signs with `personal_sign` for `createMerchantToken()`. `chainId` is
- * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent.
+ * the API's network (`capabilities().chainId`); `issuedAt` unix seconds, at most 5 minutes old when sent;
+ * `apiUrl` the API you send it to (the same `apiUrl` as `createP2Flux`) - its origin is in the text, so
+ * the signature is good at that deployment only.
  */
-export declare function merchantTokenMessage(chainId: number, wallet: string, issuedAt: number): string;
+export declare function merchantTokenMessage(chainId: number, wallet: string, issuedAt: number, apiUrl: string): string;
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
@@ -838,7 +840,7 @@ export declare function createP2Flux(options: P2FluxOptions): {
     }): Promise<Rates>;
     /**
      * Prove your receiving wallet once for higher limits: sign `merchantTokenMessage(chainId, wallet,
-     * issuedAt)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
+     * issuedAt, apiUrl)` with that wallet (`personal_sign`; a Safe works too), then pass the token back as
      * `createP2Flux({ merchantToken })`. Valid 30 days; it moves no money and opens no data.
      */
     createMerchantToken(input: {

@@ -129,6 +129,10 @@ test('the event topics are the keccak of the contracts\' event signatures', () =
 })
 
 test('statement: native, sponsored, subscription and a refund to a known payer, in block order', async () => {
+  /* A pasted intent is decoded without its signature: a merchant_ref that breaks the API's own rule
+   * (a formula, spaces, too long) is not joined. */
+  const forged = await run({ intents: [intent({ v: 1, reference: REF1, mr: '=HYPERLINK("http://x")' }), intent({ v: 1, reference: REF2, mr: 'a b' })] })
+  assert.deepEqual(forged.map((r) => r.merchant_ref), ['', '', '', ''])
   const rows = await run({ intents: [intent({ v: 1, reference: REF1, mr: 'INV-1042' }), 'not-an-intent'] })
   assert.deepEqual(rows, [
     {

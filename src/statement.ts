@@ -216,14 +216,20 @@ const blockNear = async (rpc: Rpc, ts: number, latest: { n: number; ts: number }
   return n
 }
 
-/** reference (lowercase) -> merchant_ref, read from the intents' own payloads. */
+/** The API's merchant_ref rule (index.ts MERCHANT_REF; kept here so this entry point imports nothing). */
+const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/
+
+/**
+ * reference (lowercase) -> merchant_ref, read from the intents' own payloads. Decoded without checking
+ * the signature, so only a value the API itself could have signed (MERCHANT_REF) is kept.
+ */
 const merchantRefs = (intents: string[] = []) => {
   const map = new Map<string, string>()
   for (const intent of intents) {
     try {
       const b64 = (intent.split('.')[2] ?? '').replace(/-/g, '+').replace(/_/g, '/')
       const p = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4))) as { reference?: unknown; mr?: unknown }
-      if (typeof p.reference === 'string' && typeof p.mr === 'string') map.set(p.reference.toLowerCase(), p.mr)
+      if (typeof p.reference === 'string' && typeof p.mr === 'string' && MERCHANT_REF.test(p.mr)) map.set(p.reference.toLowerCase(), p.mr)
     } catch {
       /* not an intent: nothing to join */
     }
