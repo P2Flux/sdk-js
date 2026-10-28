@@ -149,6 +149,8 @@ export type ChargeResult = {
   nextPeriodAt?: string
   /** The charge's own merchant_ref (`charge(ref, { merchantRef })`), else the subscription's, when the API echoes one. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   /** The raw API body, for logging or fields added after this SDK was written. */
   raw: Record<string, unknown>
 }
@@ -167,6 +169,8 @@ export type SubscriptionStatus = {
   allowanceUnlimited: boolean
   /** Present when created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -201,6 +205,8 @@ export type RecoveredPayment = {
   asOfBlock?: string
   /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   referenceSalt?: string
   raw: Record<string, unknown>
 }
@@ -232,6 +238,8 @@ export type RecoveredCharge = {
   asOfBlock?: string
   /** Present when the API echoes the charge's (or subscription's) merchant_ref. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -310,6 +318,8 @@ export type RefundVerification = {
   amount?: string
   /** Present when the original payment was created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -441,6 +451,8 @@ export type PaymentIntent = {
   checkoutUrl?: string
   /** Present when created with `merchantRef`, with the salt that proves `reference` commits to it (`checkMerchantRef`). */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   referenceSalt?: string
   raw: Record<string, unknown>
 }
@@ -466,6 +478,8 @@ export type ResolvedPayment = {
   privatePayment?: 'hinkal'
   /** Present when created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -575,6 +589,8 @@ export type PaymentVerification =
       screening?: 'clear' | 'sanctioned' | 'unknown'
       /** Present when the intent was created with `merchantRef`; `referenceSalt` proves it (`checkMerchantRef`). */
       merchantRef?: string
+      /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+      merchantRefVerified?: boolean
       referenceSalt?: string
       raw: Record<string, unknown>
     }
@@ -624,6 +640,8 @@ export type SubscriptionSetup = {
   salt: string
   /** Present when created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -650,6 +668,8 @@ export type ResolvedSubscription = {
   sponsorship?: SubscriptionSponsorship
   /** Present when created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   raw: Record<string, unknown>
 }
 
@@ -852,6 +872,8 @@ export type PaymentLinkTermsView = {
   suspendAfterDays?: number
   /** Present when created with `merchantRef`. */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
 }
 
 export type PaymentLink = PaymentLinkTermsView & {
@@ -884,6 +906,8 @@ export type NotificationResult = {
   payment?: PaymentVerification
   /** payment.paid confirmed, created with `merchantRef`: from the verdict (never from the event body). */
   merchantRef?: string
+  /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
+  merchantRefVerified?: boolean
   referenceSalt?: string
   /** subscription.*: the subscriber as the manage view shows it now. */
   subscriber?: PaymentLinkSubscriber
@@ -967,7 +991,7 @@ const linkTerms = (b: Record<string, unknown>): PaymentLinkTermsView => ({
   ...(b.period ? { period: b.period as number } : {}),
   ...(b.periods ? { periods: b.periods as number } : {}),
   ...(b.suspend_after_days ? { suspendAfterDays: b.suspend_after_days as number } : {}),
-  ...(b.merchant_ref ? { merchantRef: b.merchant_ref as string } : {}),
+  ...refEcho(b),
 })
 
 const linkPayment = (p: Record<string, unknown>): PaymentLinkPayment => ({
@@ -1105,9 +1129,15 @@ function intentReference(intent: string): string {
   }
 }
 
-/** `merchant_ref` / `reference_salt` from an answer, in camelCase; nothing when absent. */
+/** `merchant_ref` / `merchant_ref_verified` from an answer, in camelCase; nothing when absent. */
+const refEcho = (b: Record<string, unknown>) => ({
+  ...(typeof b.merchant_ref === 'string' && b.merchant_ref ? { merchantRef: b.merchant_ref } : {}),
+  ...(typeof b.merchant_ref_verified === 'boolean' ? { merchantRefVerified: b.merchant_ref_verified } : {}),
+})
+
+/** `merchant_ref` / `merchant_ref_verified` / `reference_salt` from an answer, in camelCase; nothing when absent. */
 const merchantRefOf = (b: Record<string, unknown>) => ({
-  ...(typeof b.merchant_ref === 'string' ? { merchantRef: b.merchant_ref } : {}),
+  ...refEcho(b),
   ...(typeof b.reference_salt === 'string' ? { referenceSalt: b.reference_salt } : {}),
 })
 
@@ -1138,8 +1168,11 @@ const hexBytes = (hex: string) => Uint8Array.from(hex.slice(2).match(/../g) ?? [
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
- * call to P2Flux - so you, or an auditor you hand the salt to, can prove which order a payment on
- * chain settled. `salt` is the `referenceSalt` the payment came back with. Malformed input is false.
+ * call to P2Flux - so you, or an auditor you hand the salt to, can prove the payment on chain was
+ * CREATED WITH that merchantRef. Not who created it: anyone can create a payment to any wallet with any
+ * merchantRef. Ownership comes from your own records (the intent or reference you stored for the order)
+ * or `merchantRefVerified` (the creator proved control of the receiving wallet). `salt` is the
+ * `referenceSalt` the payment came back with. Malformed input is false.
  */
 export function checkMerchantRef(reference: string, salt: string, merchantRef: string): boolean {
   if (!/^0x[0-9a-fA-F]{64}$/.test(reference) || !/^0x[0-9a-fA-F]{64}$/.test(salt) || !MERCHANT_REF.test(merchantRef)) return false
@@ -1267,7 +1300,7 @@ export function createP2Flux(options: P2FluxOptions) {
       subscriptionId: body.subscription_id as string | undefined,
       periodIndex: body.period_index as number | undefined,
       nextPeriodAt: body.next_period_at as string | undefined,
-      ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
+      ...refEcho(body),
       raw: body,
     }
   }
@@ -1402,7 +1435,7 @@ export function createP2Flux(options: P2FluxOptions) {
           : { networkFeeQuote: networkFeeQuote(body.network_fee_quote as Record<string, unknown>) }),
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
         ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
-        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -1593,7 +1626,7 @@ export function createP2Flux(options: P2FluxOptions) {
         contract: body.contract as string,
         amount: body.amount as string,
         salt: body.salt as string,
-        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -1642,7 +1675,7 @@ export function createP2Flux(options: P2FluxOptions) {
                 networkFeeAuthorization: body.network_fee_authorization as Record<string, unknown>,
               },
             }),
-        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -1831,7 +1864,7 @@ export function createP2Flux(options: P2FluxOptions) {
         periodEnd: body.period_end as string | null,
         nextPeriodAt: body.next_period_at as string | null,
         allowanceUnlimited: body.allowance_unlimited as boolean,
-        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -1927,7 +1960,7 @@ export function createP2Flux(options: P2FluxOptions) {
         status,
         action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS') as MerchantAction,
         asOfBlock: body.as_of_block as string | undefined,
-        ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -2096,7 +2129,7 @@ export function createP2Flux(options: P2FluxOptions) {
          * CHARGE response uses - meant both were silently undefined on every successful refund. */
         txHash: body.refund_tx_hash as string | undefined,
         amount: body.refund_amount as string | undefined,
-        ...(body.merchant_ref ? { merchantRef: body.merchant_ref as string } : {}),
+        ...refEcho(body),
         raw: body,
       }
     },
@@ -2248,6 +2281,7 @@ export function createP2Flux(options: P2FluxOptions) {
           dedupeKey: `${lower(verdict.reference)}:${lower(verdict.txHash)}`,
           payment: verdict,
           ...(verdict.merchantRef ? { merchantRef: verdict.merchantRef } : {}),
+          ...(verdict.merchantRefVerified !== undefined ? { merchantRefVerified: verdict.merchantRefVerified } : {}),
           ...(verdict.referenceSalt ? { referenceSalt: verdict.referenceSalt } : {}),
         }
       }

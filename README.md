@@ -136,7 +136,10 @@ Pass `merchantRef` (ASCII letters, digits and `. _ : / # -`, 1-64 characters) to
 `createPaymentLink`, `createSubscription` or `charge(ref, { merchantRef })`; it comes back on verify,
 recover, link and subscription status, refunds and confirmed notifications. It is signed, not
 encrypted - the buyer can read it - so never personal data. A payment's on-chain `reference` then
-commits to it, provable without P2Flux:
+commits to it, provable without P2Flux - proof the payment was created with that `merchantRef`, not who
+created it (anyone can create a payment to any wallet with any `merchantRef`). Whose order it is comes
+from your own records (the intent or reference you stored) or `merchantRefVerified: true` (the creator
+proved control of the receiving wallet with a merchant token or partner key):
 
 ```ts
 const payment = await p2flux.createPayment({ recipient, amount: '25.00', merchantRef: 'INV-1042' })

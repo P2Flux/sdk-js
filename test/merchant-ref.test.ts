@@ -106,3 +106,34 @@ test('a charge carries its own merchantRef, read back on the result and on recov
   await client.charge('p2s2.x')
   assert.deepEqual(calls.at(-1)!.body, { subscription: 'p2s2.x' }, 'without it, the request is unchanged')
 })
+
+test('merchant_ref_verified is read back as merchantRefVerified wherever merchantRef is', async () => {
+  const { client } = echoing({ ...WITH, merchant_ref_verified: true })
+  const R = '0x' + '33'.repeat(20)
+  const results = [
+    await client.createPayment({ recipient: R, amount: '1.00', merchantRef: 'INV-1042' }),
+    await client.resolvePayment('p2f1.x'),
+    await client.verifyPayment('p2f1.x', '0xab'),
+    await client.recoverPayment('p2f1.x'),
+    await client.createPaymentLink({ kind: 'once', recipient: R, amount: '1.00' }),
+    await client.paymentLinkStatus({ link: 'p2l1.x' }),
+    await client.createSubscription({ recipient: R, amount: '1.00', period: 86400 }),
+    await client.resolveSubscription('p2setup2.x'),
+    await client.status('p2s2.x'),
+    await client.verifyRefund({ intent: 'p2f1.x', txHash: '0xab' }, '1', '0xcd'),
+    await client.charge('p2s2.x'),
+    await client.recoverCharge('p2s2.x', 3),
+  ]
+  assert.deepEqual(results.map((r) => (r as { merchantRefVerified?: boolean }).merchantRefVerified), results.map(() => true))
+  const unverified = await echoing({ ...WITH, merchant_ref_verified: false }).client.verifyPayment('p2f1.x', '0xab')
+  assert.ok(unverified.valid && unverified.merchantRefVerified === false)
+  const old = await echoing(WITH).client.verifyPayment('p2f1.x', '0xab')
+  assert.equal('merchantRefVerified' in old, false, 'an older API: no key')
+
+  const b64 = Buffer.from(JSON.stringify({ reference: REFERENCE })).toString('base64url')
+  const note = await echoing({ ...WITH, merchant_ref_verified: true, tx_hash: `0x${'ab'.repeat(32)}` }).client.handleNotification(
+    { id: 'evt', type: 'payment.paid', data: { intent: `p2f1.k1.${b64}.mac`, tx_hash: `0x${'ab'.repeat(32)}`, reference: REFERENCE } },
+    { reference: REFERENCE },
+  )
+  assert.equal(note.merchantRefVerified, true)
+})
