@@ -147,6 +147,8 @@ export type ChargeResult = {
   periodIndex?: number
   /** ISO timestamp: the earliest the next period can be charged. */
   nextPeriodAt?: string
+  /** The charge's own merchant_ref (`charge(ref, { merchantRef })`), else the subscription's, when the API echoes one. */
+  merchantRef?: string
   /** The raw API body, for logging or fields added after this SDK was written. */
   raw: Record<string, unknown>
 }
@@ -228,6 +230,8 @@ export type RecoveredCharge = {
   action: MerchantAction
   /** Only on a miss. The head this answer was computed at. */
   asOfBlock?: string
+  /** Present when the API echoes the charge's (or subscription's) merchant_ref. */
+  merchantRef?: string
   raw: Record<string, unknown>
 }
 
@@ -870,6 +874,20 @@ export type NotificationResult = {
   subscriber?: PaymentLinkSubscriber
 }
 
+/** One webhook event's delivery record (`webhookDeliveries`). */
+export type WebhookDelivery = {
+  id: string
+  type: string
+  createdAt: number
+  /** `status` 0 means no HTTP answer (timeout, refused connection). */
+  attempts: { at: number; status: number; durationMs: number }[]
+  /** Unix seconds of the next try; null when finished. */
+  nextAt: number | null
+  outcome: string
+}
+
+export type WebhookDeliveries = { events: WebhookDelivery[]; raw: Record<string, unknown> }
+
 export type PaymentLinkPayment = {
   txHash: string
   blockNumber: string
@@ -1203,6 +1221,7 @@ export function createP2Flux(options: P2FluxOptions) {
       subscriptionId: body.subscription_id as string | undefined,
       periodIndex: body.period_index as number | undefined,
       nextPeriodAt: body.next_period_at as string | undefined,
+      ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
       raw: body,
     }
   }
@@ -1609,9 +1628,15 @@ export function createP2Flux(options: P2FluxOptions) {
      *
      * Safe to retry: the contract allows one charge per billing period, so a repeat call after a
      * timeout or a crash returns ALREADY_CHARGED instead of charging again.
+     *
+     * `merchantRef`: this charge's own invoice number (same rules as `PaymentTerms.merchantRef`),
+     * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref.
      */
-    async charge(subscriptionRef: string): Promise<ChargeResult> {
-      return chargeAt('/v1/charges', { subscription: subscriptionRef })
+    async charge(subscriptionRef: string, options: { merchantRef?: string } = {}): Promise<ChargeResult> {
+      return chargeAt('/v1/charges', {
+        subscription: subscriptionRef,
+        ...(options.merchantRef === undefined ? {} : { merchant_ref: options.merchantRef }),
+      })
     },
 
     // --- payment links -----------------------------------------------------------------------
@@ -1820,6 +1845,7 @@ export function createP2Flux(options: P2FluxOptions) {
         status,
         action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS') as MerchantAction,
         asOfBlock: body.as_of_block as string | undefined,
+        ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
         raw: body,
       }
     },
@@ -2006,6 +2032,38 @@ export function createP2Flux(options: P2FluxOptions) {
         expiresAt: body.expires_at as number,
         raw: body,
       }
+    },
+
+    /**
+     * What P2Flux did with the webhooks of one payment (`{ intent }`) or one payment link
+     * (`{ manage }`): every event, every attempt's time, HTTP status (0 = no answer) and duration,
+     * and when the next try is due. Kept 7 days; no bodies, no URLs.
+     */
+    async webhookDeliveries(token: { intent: string } | { manage: string }): Promise<WebhookDeliveries> {
+      const body = await postOrThrow('/v1/webhooks/deliveries', token)
+      return {
+        events: ((body.events ?? []) as Record<string, unknown>[]).map((e) => ({
+          id: e.id as string,
+          type: e.type as string,
+          createdAt: e.created_at as number,
+          attempts: ((e.attempts ?? []) as Record<string, unknown>[]).map((a) => ({
+            at: a.at as number,
+            status: a.status as number,
+            durationMs: a.duration_ms as number,
+          })),
+          nextAt: (e.next_at ?? null) as number | null,
+          outcome: e.outcome as string,
+        })),
+        raw: body,
+      }
+    },
+
+    /**
+     * "Retry now" for one webhook event that is still pending (see `webhookDeliveries`): P2Flux
+     * sends it at once instead of at its next scheduled try. At most 3 times per event per hour.
+     */
+    async redeliverWebhook(token: { intent: string } | { manage: string }, eventId: string): Promise<Record<string, unknown>> {
+      return postOrThrow('/v1/webhooks/redeliver', { ...token, event_id: eventId })
     },
 
     /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */

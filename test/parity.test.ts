@@ -43,6 +43,9 @@ const REQUIRED_OPERATIONS = [
   '/v1/links/status',
   '/v1/links/collect',
   '/v1/links/stop',
+  // Webhook delivery history and "retry now".
+  '/v1/webhooks/deliveries',
+  '/v1/webhooks/redeliver',
 ]
 
 test('every public V1 merchant operation is reachable through the SDK', async () => {
@@ -86,6 +89,8 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
   await p2flux.paymentLinkStatus({ manage: 'p2lm1.x' })
   await p2flux.collectPaymentLink('p2lm1.x', HASH)
   await p2flux.stopPaymentLink('p2lm1.x', HASH)
+  await p2flux.webhookDeliveries({ intent: 'p2f1.x' })
+  await p2flux.redeliverWebhook({ manage: 'p2lm1.x' }, 'evt_1')
 
   assert.deepEqual([...seen].sort(), [...REQUIRED_OPERATIONS].sort())
 })

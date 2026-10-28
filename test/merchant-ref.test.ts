@@ -95,3 +95,13 @@ test('handleNotification passes the verified merchant_ref on', async () => {
   assert.equal(result.merchantRef, 'INV-1042')
   assert.equal(result.referenceSalt, SALT)
 })
+
+test('a charge carries its own merchantRef, read back on the result and on recovery', async () => {
+  const { client, calls } = echoing({ status: 'CHARGED', merchant_ref: 'INV-2001', found: true })
+  const result = await client.charge('p2s2.x', { merchantRef: 'INV-2001' })
+  assert.deepEqual(calls[0]!.body, { subscription: 'p2s2.x', merchant_ref: 'INV-2001' })
+  assert.equal(result.merchantRef, 'INV-2001')
+  assert.equal((await client.recoverCharge('p2s2.x', 3)).merchantRef, 'INV-2001')
+  await client.charge('p2s2.x')
+  assert.deepEqual(calls.at(-1)!.body, { subscription: 'p2s2.x' }, 'without it, the request is unchanged')
+})

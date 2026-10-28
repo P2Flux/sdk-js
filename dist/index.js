@@ -361,6 +361,7 @@ export function createP2Flux(options) {
             subscriptionId: body.subscription_id,
             periodIndex: body.period_index,
             nextPeriodAt: body.next_period_at,
+            ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
             raw: body,
         };
     };
@@ -731,9 +732,15 @@ export function createP2Flux(options) {
          *
          * Safe to retry: the contract allows one charge per billing period, so a repeat call after a
          * timeout or a crash returns ALREADY_CHARGED instead of charging again.
+         *
+         * `merchantRef`: this charge's own invoice number (same rules as `PaymentTerms.merchantRef`),
+         * echoed on the result and by `recoverCharge`. Needs an API with merchant_ref.
          */
-        async charge(subscriptionRef) {
-            return chargeAt('/v1/charges', { subscription: subscriptionRef });
+        async charge(subscriptionRef, options = {}) {
+            return chargeAt('/v1/charges', {
+                subscription: subscriptionRef,
+                ...(options.merchantRef === undefined ? {} : { merchant_ref: options.merchantRef }),
+            });
         },
         // --- payment links -----------------------------------------------------------------------
         /**
@@ -924,6 +931,7 @@ export function createP2Flux(options) {
                 status,
                 action: (status ? (ACTIONS[status] ?? 'RETRY_LATER') : 'SUCCESS'),
                 asOfBlock: body.as_of_block,
+                ...(typeof body.merchant_ref === 'string' ? { merchantRef: body.merchant_ref } : {}),
                 raw: body,
             };
         },
@@ -1095,6 +1103,36 @@ export function createP2Flux(options) {
                 expiresAt: body.expires_at,
                 raw: body,
             };
+        },
+        /**
+         * What P2Flux did with the webhooks of one payment (`{ intent }`) or one payment link
+         * (`{ manage }`): every event, every attempt's time, HTTP status (0 = no answer) and duration,
+         * and when the next try is due. Kept 7 days; no bodies, no URLs.
+         */
+        async webhookDeliveries(token) {
+            const body = await postOrThrow('/v1/webhooks/deliveries', token);
+            return {
+                events: (body.events ?? []).map((e) => ({
+                    id: e.id,
+                    type: e.type,
+                    createdAt: e.created_at,
+                    attempts: (e.attempts ?? []).map((a) => ({
+                        at: a.at,
+                        status: a.status,
+                        durationMs: a.duration_ms,
+                    })),
+                    nextAt: (e.next_at ?? null),
+                    outcome: e.outcome,
+                })),
+                raw: body,
+            };
+        },
+        /**
+         * "Retry now" for one webhook event that is still pending (see `webhookDeliveries`): P2Flux
+         * sends it at once instead of at its next scheduled try. At most 3 times per event per hour.
+         */
+        async redeliverWebhook(token, eventId) {
+            return postOrThrow('/v1/webhooks/redeliver', { ...token, event_id: eventId });
         },
         /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */
         async prepareAllowanceRevocation() {
