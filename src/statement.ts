@@ -227,7 +227,7 @@ const getLogs = async (rpc: Rpc, address: string, topics: unknown[], from: numbe
     answers.forEach((logs, i) => {
       const [a, b] = spans[i]!
       if (!(logs instanceof Error)) out.push(...(logs as Log[]))
-      else if (a === b) throw logs
+      else if (a === b || PRUNED.test(logs.message)) throw logs // pruned history: no half of it is served either
       else refused.push([a, Math.floor((a + b) / 2)], [Math.floor((a + b) / 2) + 1, b])
     })
     spans = refused
@@ -240,17 +240,50 @@ const block = async (rpc: Rpc, tag: number | 'latest') => {
   return { n: parseInt(b!.number, 16), ts: parseInt(b!.timestamp, 16) }
 }
 
-/** The block near `ts`: an estimate at Base's 2 s per block, corrected twice. Callers widen and filter by date. */
-const blockNear = async (rpc: Rpc, ts: number, latest: { n: number; ts: number }) => {
-  if (ts >= latest.ts) return latest.n
-  let n = Math.max(0, latest.n - Math.ceil((latest.ts - ts) / 2))
-  for (let i = 0; i < 2; i++) {
-    const b = await block(rpc, n)
-    if (b.ts === ts) break
-    n = Math.min(latest.n, Math.max(0, n + Math.round((ts - b.ts) / 2)))
+type Block = { n: number; ts: number }
+
+/**
+ * The first block at or after `ts` (latest.n + 1 when none), never below `floor`. No block time is
+ * assumed (Base Sepolia went from 2 s to 0.2 s a block): an estimate from the chain's own recent pace
+ * (`pace`, seconds a block), then galloped and bisected until two neighbouring blocks bracket `ts`.
+ */
+const firstBlockAt = async (rpc: Rpc, ts: number, latest: Block, pace: number, floor: number): Promise<number> => {
+  if (ts > latest.ts) return latest.n + 1
+  const at = async (n: number) => (await block(rpc, n)).ts
+  let lo = floor - 1 // invariant: block lo is before ts (floor - 1: below what may be read), block hi at or after it
+  let hi = latest.n
+  const est = Math.min(latest.n, Math.max(floor, latest.n - Math.floor((latest.ts - ts) / pace)))
+  if ((await at(est)) >= ts) {
+    hi = est
+    for (let step = 1; hi > floor; step *= 2) {
+      const n = Math.max(floor, hi - step)
+      if ((await at(n)) < ts) {
+        lo = n
+        break
+      }
+      hi = n
+    }
+  } else {
+    lo = est
+    for (let step = 1; ; step *= 2) {
+      const n = Math.min(latest.n, lo + step)
+      if (n === latest.n || (await at(n)) >= ts) {
+        hi = n
+        break
+      }
+      lo = n
+    }
   }
-  return n
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if ((await at(mid)) >= ts) hi = mid
+    else lo = mid
+  }
+  return hi
 }
+
+/** A node's refusal to serve blocks it no longer keeps (its "earliest available" block, when it says). */
+const PRUNED = /prun|earliest available|history (is )?(not |un)available/i
 
 /** The API's merchant_ref rule (index.ts MERCHANT_REF; kept here so this entry point imports nothing). */
 const MERCHANT_REF = /^[A-Za-z0-9._:\/#-]{1,64}$/
@@ -304,9 +337,16 @@ export async function statementOn(net: StatementContracts, options: Omit<Stateme
   const refs = merchantRefs(options.intents)
 
   const latest = await block(rpc, 'latest')
-  // Widened by a few blocks either way; rows are then held to the dates themselves.
-  const fromBlock = Math.max(0, (await blockNear(rpc, fromTs, latest)) - 5)
-  const toBlock = Math.min(latest.n, (await blockNear(rpc, toTs, latest)) + 5)
+  // Nothing settles below the oldest contract's deploy block: no search or scan goes there.
+  const floor = Math.min(
+    ...[net.splitterDeployBlock, net.sponsoredSplitterDeployBlock, net.recurringDeployBlock],
+    ...[...(net.retired?.splitters ?? []), ...(net.retired?.sponsoredSplitters ?? [])].map((c) => c.deployBlock),
+  )
+  const back = Math.min(10_000, latest.n - floor)
+  const recent = back > 0 ? await block(rpc, latest.n - back) : latest
+  const pace = recent.ts < latest.ts ? (latest.ts - recent.ts) / back : 1
+  const fromBlock = await firstBlockAt(rpc, fromTs, latest, pace, floor)
+  const toBlock = (await firstBlockAt(rpc, toTs + 1, latest, pace, floor)) - 1
   const scanIn = (lo: number, hi: number) => async (c: Contract, topics: unknown[]) => {
     const a = Math.max(lo, c.deployBlock)
     return a > hi ? [] : getLogs(rpc, c.address, topics, a, hi)
@@ -380,8 +420,22 @@ export async function statementOn(net: StatementContracts, options: Omit<Stateme
   // larger. Only when the wallet sent anything are the look-back's payments read (they match, they are not rows).
   const sent = await getLogs(rpc, net.usdc, [TOPICS.transfer, walletTopic], fromBlock, toBlock)
   if (sent.length && lookbackDays > 0) {
-    const lookFrom = Math.max(0, (await blockNear(rpc, fromTs - lookbackDays * 86_400, latest)) - 5)
-    if (lookFrom < fromBlock) await settlements(lookFrom, fromBlock - 1)
+    /* A node that no longer keeps the look-back's oldest blocks shortens it to what it has (its "earliest
+     * available" block; without one, no look-back): a refund of a payment older than that is unmatched -
+     * not a row - instead of failing the statement. */
+    let lookFrom = await firstBlockAt(rpc, fromTs - lookbackDays * 86_400, latest, pace, floor)
+    const kept = entries.length
+    while (lookFrom < fromBlock) {
+      try {
+        await settlements(lookFrom, fromBlock - 1)
+        break
+      } catch (err) {
+        if (!(err instanceof Error) || !PRUNED.test(err.message)) throw err
+        entries.length = kept
+        const earliest = Number(/earliest available:? *(\d+)/i.exec(err.message)?.[1] ?? NaN)
+        lookFrom = earliest > lookFrom ? earliest : fromBlock
+      }
+    }
   }
   /* Each payment can be refunded up to its gross, once: a transfer matches only a payment with that much
    * left (the one with exactly that much left first, else the most recent with room), and uses it up. */

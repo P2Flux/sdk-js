@@ -161,7 +161,9 @@ writeFileSync('october.csv', toCsv(rows, 'xero'))  // 'generic' | 'xero' | 'quic
 back to a payer after their payment and no larger than what is left of it (a payment is refunded at most
 up to its gross; an exact match is preferred). The payment may be up to `lookbackDays` (default 90)
 before `from`: a September payment refunded in October shows on the October statement as the refund
-only. `statementOn(contracts, { wallet, from, to, rpcUrls })` is the same over contracts and
+only. The look-back never reads below the contracts' deploy block, and a public RPC that no longer keeps
+its oldest blocks shortens it (a refund of an older payment is then not listed) instead of failing. Dates
+map to blocks by the chain's own timestamps - no block time is assumed. `statementOn(contracts, { wallet, from, to, rpcUrls })` is the same over contracts and
 endpoints you name, without the built-in network table (for a bundle that must carry one network).
 
 `currencies: ['EUR', 'GBP']` adds `value_usd` (USDC booked as USD 1:1), `value_eur`, `value_gbp` (the

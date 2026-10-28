@@ -98,19 +98,21 @@ const matches = (want: unknown, got: string | undefined) =>
   want === null || want === undefined || (Array.isArray(want) ? want.some((w) => w.toLowerCase() === got?.toLowerCase()) : String(want).toLowerCase() === got?.toLowerCase())
 
 /** `limit`: the widest eth_getLogs range served (wider is a JSON-RPC error); `status(n)`: the HTTP status of the n-th request. */
-const rpcStub = ({ limit = 5_000, status = (_n: number): number => 200 } = {}) => {
+/* `tsAt`: the chain's block times (default 2 s a block); `earliest`: the first block a pruned node still serves logs for. */
+const rpcStub = ({ limit = 5_000, status = (_n: number): number => 200, tsAt = tsOf, earliest = 0 } = {}) => {
   let requests = 0
   const seen: { method: string; params: unknown[] }[] = []
   const answer = (method: string, params: unknown[]): { result?: unknown; error?: unknown } => {
     seen.push({ method, params })
     if (method === 'eth_getBlockByNumber') {
       const n = params[0] === 'latest' ? LATEST : parseInt(params[0] as string, 16)
-      return { result: { number: '0x' + n.toString(16), timestamp: '0x' + tsOf(n).toString(16) } }
+      return { result: { number: '0x' + n.toString(16), timestamp: '0x' + tsAt(n).toString(16) } }
     }
     if (method === 'eth_getLogs') {
       const f = params[0] as { address: string; fromBlock: string; toBlock: string; topics: unknown[] }
       const from = parseInt(f.fromBlock, 16)
       const to = parseInt(f.toBlock, 16)
+      if (from < earliest) return { error: { code: -32000, message: `pruned history unavailable: requested ${from}, earliest available ${earliest}` } }
       if (to - from > limit) return { error: { code: -32005, message: `query exceeds max block range ${limit}` } }
       return {
         result: LOGS.filter((l) => {
@@ -431,4 +433,30 @@ test('statement RPC: a request that hangs is aborted after timeoutMs', { timeout
   const hang = ((_u: string, init: { signal?: AbortSignal }) =>
     new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))) as unknown as typeof fetch
   await assert.rejects(run({ fetch: hang, timeoutMs: 50 }))
+})
+
+test('statement dates: no block time is assumed - at 0.2 s a block the window is exactly the first block >= from to the last <= to', async () => {
+  const fast = (n: number) => GENESIS + Math.floor(n / 5) // 0.2 s a block: five blocks share a second
+  for (const tsAt of [fast, tsOf]) {
+    const stub = rpcStub({ tsAt })
+    const rows = await run({ from: tsAt(B2), to: tsAt(B3), fetch: stub.impl })
+    assert.deepEqual(rows.map((r) => r.tx_hash), [hash('2'), hash('3')], `pace ${tsAt === fast ? 0.2 : 2}`)
+    assert.deepEqual((await run({ from: tsAt(B2) + 1, to: tsAt(B3) - 1, fetch: rpcStub({ tsAt }).impl })).map((r) => r.tx_hash), [], 'B2 and B3 just outside')
+    assert.equal(rows[0]!.date, new Date(tsAt(B2) * 1000).toISOString())
+  }
+})
+
+test('statement look-back: starts at the contracts\' deploy block, and a pruned node shortens it instead of failing', async () => {
+  const october = { from: tsOf(B6 - 1_000), to: tsOf(B6 + 10) }
+  const floor = Math.min(net.splitterDeployBlock, net.sponsoredSplitterDeployBlock, net.recurringDeployBlock)
+  const stub = rpcStub()
+  await run({ ...october, fetch: stub.impl })
+  const lowest = Math.min(...stub.seen.filter((c) => c.method === 'eth_getLogs').map((c) => parseInt((c.params[0] as { fromBlock: string }).fromBlock, 16)))
+  assert.ok(lowest >= floor, `look-back read from ${lowest}, below the deploy block ${floor}`)
+  // The node keeps logs from 46,350,000: the September payment (46,300,000) is beyond it - the refund is unmatched, not an error.
+  assert.deepEqual(await run({ ...october, fetch: rpcStub({ earliest: 46_350_000 }).impl }), [])
+  // Kept from 46,200,000: the look-back reaches the payment.
+  assert.equal((await run({ ...october, fetch: rpcStub({ earliest: 46_200_000 }).impl })).length, 1)
+  // The window itself beyond what the node keeps is still an error, never a short statement.
+  await assert.rejects(run({ ...october, fetch: rpcStub({ earliest: B6 }).impl }), /pruned/)
 })
