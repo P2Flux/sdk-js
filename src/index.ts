@@ -115,6 +115,10 @@ export type ChargeStatus =
   | 'INVALID_SIGNATURE'
   | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE'
   | 'UNSUPPORTED_SIGNATURE_FORMAT'
+  /* Signed webhooks (verifyWebhook): the `p2flux-signature` header does not verify against a P2Flux
+   * key, or was made more than `toleranceSec` from now. Never retryable as it stands. */
+  | 'WEBHOOK_SIGNATURE_INVALID'
+  | 'WEBHOOK_TOO_OLD'
 
 export type MerchantAction =
   | 'SUCCESS'
@@ -478,7 +482,21 @@ export type Capabilities = {
     /** Revoking a recurring authorization is always the payer's own transaction. */
     zeroNativeRevoke: boolean
   }[]
+  /** The public keys webhooks are signed with (see `verifyWebhook`). Absent when the API sends no webhooks, and on older APIs. */
+  webhookSigningKeys?: WebhookSigningKey[]
   raw: Record<string, unknown>
+}
+
+/** One Ed25519 key P2Flux signs webhooks with: `publicKey` is the raw 32 bytes, base64url. */
+export type WebhookSigningKey = { kid: string; alg: 'Ed25519'; publicKey: string }
+
+export type VerifyWebhookOptions = {
+  /** kid -> base64url public key. Default: the API's own, from `capabilities()`, fetched once and cached. */
+  keys?: Record<string, string>
+  /** How far the signature's time may be from now, in seconds. Default 300. */
+  toleranceSec?: number
+  /** Unix seconds, for tests. Default: the clock. */
+  now?: number
 }
 
 /**
@@ -726,6 +744,8 @@ const ACTIONS: Record<string, MerchantAction> = {
   ALREADY_SUBSCRIBED: 'INVALID_REQUEST',
   PAYER_SANCTIONED: 'STOP_SUBSCRIPTION',
   RECIPIENT_SANCTIONED: 'INVALID_REQUEST',
+  WEBHOOK_SIGNATURE_INVALID: 'INVALID_REQUEST',
+  WEBHOOK_TOO_OLD: 'INVALID_REQUEST',
 }
 
 /** Payment links: an invoice paid once, a fixed price paid many times, or a subscription P2Flux collects. */
@@ -1007,6 +1027,56 @@ function intentReference(intent: string): string {
   }
 }
 
+const fromBase64Url = (s: string) => {
+  if (!/^[A-Za-z0-9_-]*$/.test(s)) throw new TypeError('not base64url')
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+  return Uint8Array.from(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0))
+}
+
+/* WebCrypto: global in browsers and Node 19+; Node 18 has it only as node:crypto's `webcrypto`. The
+ * specifier is a variable so a browser bundle never tries to resolve node:crypto. */
+const subtleCrypto = async (): Promise<SubtleCrypto> => {
+  if (globalThis.crypto?.subtle) return globalThis.crypto.subtle
+  const specifier = 'node:crypto'
+  return ((await import(/* @vite-ignore */ specifier)) as { webcrypto: Crypto }).webcrypto.subtle
+}
+
+/**
+ * The `p2flux-signature` header (`t=<unix>,kid=<id>,v1=<base64url Ed25519>`) checked over the bytes
+ * `${t}.${body}`. Resolves to WEBHOOK_TOO_OLD, WEBHOOK_SIGNATURE_INVALID, or null when it verifies.
+ * `keyFor` may be asked twice for a kid it does not know (key rotation).
+ */
+const checkSignature = async (
+  body: Uint8Array,
+  header: string,
+  keyFor: (kid: string, retry: boolean) => Promise<string | undefined>,
+  toleranceSec: number,
+  now: number,
+): Promise<'WEBHOOK_SIGNATURE_INVALID' | 'WEBHOOK_TOO_OLD' | null> => {
+  const parts: Record<string, string> = {}
+  for (const part of String(header).split(',')) {
+    const i = part.indexOf('=')
+    if (i > 0) parts[part.slice(0, i).trim()] = part.slice(i + 1).trim()
+  }
+  const { t, kid, v1 } = parts
+  if (!t || !/^\d{1,12}$/.test(t) || !kid || !v1) return 'WEBHOOK_SIGNATURE_INVALID'
+  const key = (await keyFor(kid, false)) ?? (await keyFor(kid, true))
+  if (!key) return 'WEBHOOK_SIGNATURE_INVALID'
+  try {
+    const subtle = await subtleCrypto()
+    const publicKey = await subtle.importKey('raw', fromBase64Url(key), { name: 'Ed25519' }, false, ['verify'])
+    const prefix = new TextEncoder().encode(`${t}.`)
+    const signedBytes = new Uint8Array(prefix.length + body.length)
+    signedBytes.set(prefix)
+    signedBytes.set(body, prefix.length)
+    if (!(await subtle.verify({ name: 'Ed25519' }, publicKey, fromBase64Url(v1), signedBytes))) return 'WEBHOOK_SIGNATURE_INVALID'
+  } catch {
+    return 'WEBHOOK_SIGNATURE_INVALID'
+  }
+  // Checked after the signature, so a stale answer is only ever given about a genuine P2Flux event.
+  return Math.abs(now - Number(t)) > toleranceSec ? 'WEBHOOK_TOO_OLD' : null
+}
+
 export function createP2Flux(options: P2FluxOptions) {
   const base = options.apiUrl.replace(/\/$/, '')
   const timeoutMs = options.timeoutMs ?? 60_000
@@ -1071,7 +1141,49 @@ export function createP2Flux(options: P2FluxOptions) {
     }
   }
 
+  /* The webhook signing keys from capabilities: fetched once, again only for a kid not seen yet
+   * (a rotation), and then at most once a minute so forged kids cannot make every check a fetch. */
+  let signingKeys: { at: number; keys: Promise<Record<string, string>> } | undefined
+  const signingKey = async (kid: string, retry: boolean): Promise<string | undefined> => {
+    if (!signingKeys || (retry && Date.now() - signingKeys.at > 60_000)) {
+      const keys = client.capabilities().then((c) => Object.fromEntries((c.webhookSigningKeys ?? []).map((k) => [k.kid, k.publicKey])))
+      signingKeys = { at: Date.now(), keys }
+      keys.catch(() => (signingKeys = undefined))
+    } else if (retry) return undefined
+    const keys = await signingKeys.keys
+    return Object.hasOwn(keys, kid) ? keys[kid] : undefined
+  }
+
   const client = {
+    /**
+     * Check a webhook's `p2flux-signature` header and return the parsed event.
+     *
+     * Pass the body EXACTLY as received (the raw string or bytes, before any JSON parsing) and the
+     * header's value. Throws P2FluxError `WEBHOOK_SIGNATURE_INVALID` (not signed by P2Flux, or
+     * changed) or `WEBHOOK_TOO_OLD` (signed more than `toleranceSec` from now - a replay, or a
+     * clock to fix); both have action INVALID_REQUEST. Fetching the keys can throw NETWORK_ERROR.
+     *
+     * A valid signature proves P2Flux sent this event, not that money moved: still decide on
+     * money with `verifyPayment` (or `handleNotification`, which does both).
+     */
+    async verifyWebhook(rawBody: string | Uint8Array, header: string, options: VerifyWebhookOptions = {}): Promise<Record<string, unknown>> {
+      const bytes = typeof rawBody === 'string' ? new TextEncoder().encode(rawBody) : rawBody
+      const keys = options.keys
+      const failure = await checkSignature(
+        bytes,
+        header,
+        keys ? async (kid) => (Object.hasOwn(keys, kid) ? keys[kid] : undefined) : signingKey,
+        options.toleranceSec ?? 300,
+        options.now ?? Math.floor(Date.now() / 1000),
+      )
+      if (failure) throw new P2FluxError(failure, 'INVALID_REQUEST')
+      try {
+        return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+      } catch {
+        throw new P2FluxError('WEBHOOK_SIGNATURE_INVALID', 'INVALID_REQUEST', { reason: 'MALFORMED' })
+      }
+    },
+
     /**
      * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
      * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
@@ -1234,6 +1346,15 @@ export function createP2Flux(options: P2FluxOptions) {
           sponsorContracts: (token.sponsor_contracts ?? {}) as Record<string, string | null>,
           zeroNativeRevoke: Boolean(token.zero_native_revoke),
         })),
+        ...(Array.isArray(body.webhook_signing_keys)
+          ? {
+              webhookSigningKeys: (body.webhook_signing_keys as Record<string, unknown>[]).map((k) => ({
+                kid: k.kid as string,
+                alg: k.alg as 'Ed25519',
+                publicKey: k.public_key as string,
+              })),
+            }
+          : {}),
         raw: body,
       }
     },
@@ -1840,15 +1961,28 @@ export function createP2Flux(options: P2FluxOptions) {
      * still confirming, the API busy or unreachable): answer with a 5xx then, and P2Flux sends it again.
      * A wrong, forged or replayed event returns `confirmed: false`, and when the event does not even name
      * your order nothing is asked of the API. TypeError on a missing or malformed `expect`.
+     *
+     * Optional `expect.signature`: the `p2flux-signature` header. Given, the raw body (a string) is
+     * checked first (`verifyWebhook`, with `keys` / `toleranceSec` as there) and a bad or stale one
+     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
      */
     async handleNotification(
       notification: string | Record<string, unknown>,
-      expect: { reference?: string; linkId?: string; manage?: string },
+      expect: { reference?: string; linkId?: string; manage?: string; signature?: string } & Omit<VerifyWebhookOptions, 'now'>,
     ): Promise<NotificationResult> {
       if (!expect || (!expect.reference && !expect.linkId)) throw new TypeError('handleNotification needs expect.reference or expect.linkId')
       // A malformed id would match too much ("0x" is a prefix of every reference).
       if (expect.reference && !/^0x[0-9a-fA-F]{64}$/.test(expect.reference)) throw new TypeError('expect.reference must be the 32-byte reference from createPayment')
       if (expect.linkId && !/^0x[0-9a-fA-F]{32}$/.test(expect.linkId)) throw new TypeError('expect.linkId must be the 16-byte link id')
+      if (expect.signature !== undefined) {
+        if (typeof notification !== 'string') throw new TypeError('expect.signature needs the raw body as a string')
+        try {
+          await client.verifyWebhook(notification, expect.signature, expect)
+        } catch (err) {
+          if (err instanceof P2FluxError && err.action === 'INVALID_REQUEST') return { confirmed: false, eventId: '', type: '', reason: err.status }
+          throw err
+        }
+      }
       let event: Record<string, unknown>
       try {
         event = typeof notification === 'string' ? (JSON.parse(notification) as Record<string, unknown>) : notification

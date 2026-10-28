@@ -14,7 +14,7 @@
  * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
-export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_LINK' | 'LINK_EXPIRED' | 'LINK_UNAVAILABLE' | 'ALREADY_SUBSCRIBED' | 'PAYER_SANCTIONED' | 'RECIPIENT_SANCTIONED' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT';
+export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_LINK' | 'LINK_EXPIRED' | 'LINK_UNAVAILABLE' | 'ALREADY_SUBSCRIBED' | 'PAYER_SANCTIONED' | 'RECIPIENT_SANCTIONED' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT' | 'WEBHOOK_SIGNATURE_INVALID' | 'WEBHOOK_TOO_OLD';
 export type MerchantAction = 'SUCCESS' | 'WAIT' | 'RETRY_LATER' | 'CUSTOMER_ACTION_REQUIRED' | 'STOP_SUBSCRIPTION' | 'INVALID_REQUEST';
 export type ChargeResult = {
     status: ChargeStatus;
@@ -343,7 +343,23 @@ export type Capabilities = {
         /** Revoking a recurring authorization is always the payer's own transaction. */
         zeroNativeRevoke: boolean;
     }[];
+    /** The public keys webhooks are signed with (see `verifyWebhook`). Absent when the API sends no webhooks, and on older APIs. */
+    webhookSigningKeys?: WebhookSigningKey[];
     raw: Record<string, unknown>;
+};
+/** One Ed25519 key P2Flux signs webhooks with: `publicKey` is the raw 32 bytes, base64url. */
+export type WebhookSigningKey = {
+    kid: string;
+    alg: 'Ed25519';
+    publicKey: string;
+};
+export type VerifyWebhookOptions = {
+    /** kid -> base64url public key. Default: the API's own, from `capabilities()`, fetched once and cached. */
+    keys?: Record<string, string>;
+    /** How far the signature's time may be from now, in seconds. Default 300. */
+    toleranceSec?: number;
+    /** Unix seconds, for tests. Default: the clock. */
+    now?: number;
 };
 /**
  * A verification verdict - a real discriminated union, so `if (result.valid)` narrows.
@@ -651,6 +667,18 @@ export type SubscriptionSponsorship = {
 };
 export declare function createP2Flux(options: P2FluxOptions): {
     /**
+     * Check a webhook's `p2flux-signature` header and return the parsed event.
+     *
+     * Pass the body EXACTLY as received (the raw string or bytes, before any JSON parsing) and the
+     * header's value. Throws P2FluxError `WEBHOOK_SIGNATURE_INVALID` (not signed by P2Flux, or
+     * changed) or `WEBHOOK_TOO_OLD` (signed more than `toleranceSec` from now - a replay, or a
+     * clock to fix); both have action INVALID_REQUEST. Fetching the keys can throw NETWORK_ERROR.
+     *
+     * A valid signature proves P2Flux sent this event, not that money moved: still decide on
+     * money with `verifyPayment` (or `handleNotification`, which does both).
+     */
+    verifyWebhook(rawBody: string | Uint8Array, header: string, options?: VerifyWebhookOptions): Promise<Record<string, unknown>>;
+    /**
      * The address that opens a checkout page for a token the API issued: `pay` for a payment intent,
      * `subscribe` for a setup token, `cancel`, `refund` and `approve` for theirs. The token goes in
      * the fragment, which browsers never send to a server or put in a Referer header.
@@ -909,11 +937,16 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * still confirming, the API busy or unreachable): answer with a 5xx then, and P2Flux sends it again.
      * A wrong, forged or replayed event returns `confirmed: false`, and when the event does not even name
      * your order nothing is asked of the API. TypeError on a missing or malformed `expect`.
+     *
+     * Optional `expect.signature`: the `p2flux-signature` header. Given, the raw body (a string) is
+     * checked first (`verifyWebhook`, with `keys` / `toleranceSec` as there) and a bad or stale one
+     * returns `confirmed: false` with reason WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD.
      */
     handleNotification(notification: string | Record<string, unknown>, expect: {
         reference?: string;
         linkId?: string;
         manage?: string;
-    }): Promise<NotificationResult>;
+        signature?: string;
+    } & Omit<VerifyWebhookOptions, "now">): Promise<NotificationResult>;
 };
 export type P2Flux = ReturnType<typeof createP2Flux>;
