@@ -96,7 +96,7 @@ Lost the hash entirely? `recoverPayment(intent)` finds the settlement from the i
 
 Pass `notifyUrl` (a public https URL) to `createPayment` or `createPaymentLink` and P2Flux POSTs a
 `payment.paid` event there once the payment is verified on chain (subscription links:
-`subscription.charged` and `subscription.updated`), retrying for about 18 hours. The notification
+`subscription.charged` and `subscription.updated`), retrying for about 21 hours. The notification
 carries no secret - it is a hint - so confirm it before fulfilling:
 
 ```ts
