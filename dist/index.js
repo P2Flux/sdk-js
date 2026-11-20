@@ -480,6 +480,7 @@ export function createP2Flux(options) {
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
                 ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
+                ...(terms.confirmation === undefined ? {} : { confirmation: terms.confirmation }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -827,6 +828,7 @@ export function createP2Flux(options) {
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
                 ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
+                ...(terms.confirmation === undefined ? {} : { confirmation: terms.confirmation }),
             });
             return {
                 ...linkTerms(body),

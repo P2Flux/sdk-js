@@ -214,6 +214,8 @@ export type RefundVerification = {
  * service fee. Ask `capabilities()` before offering it; not every network and token supports it.
  */
 export type GasPaymentMode = 'native' | 'payment_token';
+/** How long a payment must sit on chain before it counts as paid: standard (~6 s), fast (<1 s), safe (~100 s). */
+export type ConfirmationLevel = 'standard' | 'fast' | 'safe';
 export type PaymentTerms = {
     recipient: string;
     amount: string;
@@ -243,6 +245,13 @@ export type PaymentTerms = {
      * it (`referenceSalt`, `checkMerchantRef`). Needs an API with merchant_ref (older ones refuse it).
      */
     merchantRef?: string;
+    /**
+     * Optional: how long the payment must sit on chain before it counts as paid. `standard` (default, about 6 s),
+     * `fast` (under 1 s: quicker, but a rare network reorg in that second could still undo it - use it where a mistake
+     * is cheap to reverse), `safe` (about 100 s: for high value). Signed into the payment; the buyer cannot change it.
+     * Needs an API with confirmation levels (older ones refuse the field).
+     */
+    confirmation?: ConfirmationLevel;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -613,6 +622,8 @@ export type PaymentLinkTerms = {
     privatePayment?: 'hinkal';
     /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
     merchantRef?: string;
+    /** `once` and `reusable` links: as `PaymentTerms.confirmation`. Not for subscriptions (renewals always wait for the safe block). */
+    confirmation?: ConfirmationLevel;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
