@@ -24,3 +24,12 @@ test('confirmation goes out on payments and links; absent stays absent (older AP
   assert.deepEqual(calls.map((c) => [c.path, c.body.confirmation]), [['/v1/payments', 'fast'], ['/v1/links', 'safe'], ['/v1/payments', undefined]])
   assert.equal('confirmation' in calls[2]!.body, false)
 })
+
+test('link terms read back auto links and the confirmation level', async () => {
+  const impl = (async () =>
+    ({ status: 200, json: async () => ({ link: 'l', manage: 'm', kind: 'once', id: '0x', recipient: '0x' + '33'.repeat(20), amount: '1.00', amount_units: '1000000', created_at: 1, expires_at: 2, gas_payment_mode: 'auto', confirmation: 'fast' }) }) as never) as unknown as typeof fetch
+  const client = createP2Flux({ apiUrl: 'https://api.p2flux.example', fetch: impl })
+  const link = await client.createPaymentLink({ kind: 'once', recipient: '0x' + '33'.repeat(20), amount: '1.00', gasPaymentMode: 'auto' })
+  assert.equal(link.gasPaymentMode, 'auto')
+  assert.equal(link.confirmation, 'fast')
+})

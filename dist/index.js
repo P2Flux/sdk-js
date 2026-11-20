@@ -135,6 +135,7 @@ const linkTerms = (b) => ({
     createdAt: b.created_at,
     expiresAt: b.expires_at,
     ...(b.gas_payment_mode ? { gasPaymentMode: b.gas_payment_mode } : {}),
+    ...(b.confirmation ? { confirmation: b.confirmation } : {}),
     ...(b.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
     ...(b.period ? { period: b.period } : {}),
     ...(b.periods ? { periods: b.periods } : {}),
