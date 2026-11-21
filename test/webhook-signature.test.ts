@@ -129,3 +129,60 @@ test('handleNotification: signature null is treated as absent (no header), like 
   const r = await offline.handleNotification(event, { reference: REF, signature: null as never })
   assert.equal(r.reason, 'NOT_YOUR_ORDER')
 })
+
+// --- subscription.created: confirmed only for the setup this shop created (salt) and the API's own terms -------
+const SALT = '79088244617109580184559177081431817456'
+const MERCHANT = '0x' + 'ab'.repeat(20)
+const createdEvent = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({ id: '0x' + '77'.repeat(32), type: 'subscription.created', created_at: T, chain_id: 8453, data: { subscription: 'p2s2.k1.abc.mac', subscription_id: '0x' + 'CD'.repeat(32), salt: SALT, payer: '0x' + 'EF'.repeat(20), recipient: MERCHANT, amount: '199.000000', amount_units: '199000000', period: 2592000, allowance: 'ready', allowance_ready: true, merchant_ref: 'CHK-1', ...over } })
+const shop = (terms: Record<string, unknown>) => {
+  let statusCalls = 0
+  const impl = (async (url: string) => {
+    if (new URL(String(url)).pathname === '/v1/subscriptions/status') {
+      statusCalls++
+      return { status: 200, json: async () => ({ active: true, subscription_id: '0x' + 'cd'.repeat(32), terms }) } as never
+    }
+    return { status: 200, json: async () => ({ chain_id: 8453, supported: true, tokens: [] }) } as never
+  }) as unknown as typeof fetch
+  return { client: createP2Flux({ apiUrl: 'https://shop.p2flux.example', fetch: impl }), statusCalls: () => statusCalls }
+}
+const GOOD = { salt: SALT, recipient: MERCHANT, amount_units: '199000000', period: 2592000 }
+const EXPECT = { salt: SALT, recipient: MERCHANT.toUpperCase().replace('0X', '0x'), amountUnits: '199000000', period: 2592000, keys: KEYS, now: T }
+
+test('handleSubscriptionCreated: confirmed with the reference; the subscription id is the dedupe key', async () => {
+  const body = createdEvent()
+  const r = await shop(GOOD).client.handleSubscriptionCreated(body, signed(body, T), EXPECT)
+  assert.equal(r.confirmed, true, JSON.stringify(r))
+  assert.equal(r.subscription, 'p2s2.k1.abc.mac')
+  assert.equal(r.dedupeKey, '0x' + 'cd'.repeat(32))
+  assert.equal(r.allowanceReady, true)
+  assert.equal(r.merchantRef, 'CHK-1')
+})
+
+test('handleSubscriptionCreated: another setup, other terms, a forged body, another event are all refused', async () => {
+  const body = createdEvent()
+  const foreign = createdEvent({ salt: '123' })
+  const s = shop(GOOD)
+  assert.equal((await s.client.handleSubscriptionCreated(foreign, signed(foreign, T), EXPECT)).reason, 'NOT_YOUR_SETUP')
+  assert.equal(s.statusCalls(), 0, 'an event for somebody else costs no API call')
+  assert.equal((await shop({ ...GOOD, amount_units: '1000000' }).client.handleSubscriptionCreated(body, signed(body, T), EXPECT)).reason, 'TERMS_MISMATCH')
+  assert.equal((await shop({ ...GOOD, salt: '999' }).client.handleSubscriptionCreated(body, signed(body, T), EXPECT)).reason, 'NOT_YOUR_SETUP')
+  assert.equal((await s.client.handleSubscriptionCreated(body, signed(body + ' ', T), EXPECT)).reason, 'WEBHOOK_SIGNATURE_INVALID')
+  assert.equal((await s.client.handleSubscriptionCreated(body, signed(body, T - 4000), EXPECT)).reason, 'WEBHOOK_TOO_OLD')
+  assert.equal((await s.client.handleSubscriptionCreated(BODY, HEADER, EXPECT)).reason, 'UNKNOWN_EVENT')
+  await assert.rejects(s.client.handleSubscriptionCreated(body, signed(body, T), { keys: KEYS } as never), TypeError)
+})
+
+test('createSubscription sends notify_url and return_url and reads checkout_valid_until; absent stays absent', async () => {
+  const calls: Record<string, unknown>[] = []
+  const impl = (async (_url: string, init: { body: string }) => {
+    calls.push(JSON.parse(init.body))
+    return { status: 200, json: async () => ({ setup_token: 'p2setup2.k1.x.y', expires_at: 9, chain_id: 8453, contract: '0x1', amount: '1.000000', salt: '5', checkout_valid_until: 7, notify_url: 'https://s.example/h', return_url: 'https://s.example/t' }) } as never
+  }) as unknown as typeof fetch
+  const client = createP2Flux({ apiUrl: 'https://api.p2flux.example', fetch: impl })
+  const setup = await client.createSubscription({ recipient: MERCHANT, amount: '1.00', period: 2592000, notifyUrl: 'https://s.example/h', returnUrl: 'https://s.example/t' })
+  assert.deepEqual([calls[0]!.notify_url, calls[0]!.return_url], ['https://s.example/h', 'https://s.example/t'])
+  assert.deepEqual([setup.checkoutValidUntil, setup.notifyUrl, setup.returnUrl], [7, 'https://s.example/h', 'https://s.example/t'])
+  await client.createSubscription({ recipient: MERCHANT, amount: '1.00', period: 2592000 })
+  assert.equal('notify_url' in calls[1]!, false)
+})

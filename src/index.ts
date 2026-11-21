@@ -544,6 +544,23 @@ export type Capabilities = {
 /** One Ed25519 key P2Flux signs webhooks with: `publicKey` is the raw 32 bytes, base64url. */
 export type WebhookSigningKey = { kid: string; alg: 'Ed25519'; publicKey: string }
 
+/** The answer of `handleSubscriptionCreated`. */
+export type SubscriptionCreatedResult = {
+  confirmed: boolean
+  eventId: string
+  type: string
+  reason?: string
+  /** The subscription id: act once per subscription, however often it is announced. */
+  dedupeKey?: string
+  /** The reference `charge()` needs. Store it with your order. */
+  subscription?: string
+  subscriptionId?: string
+  payer?: string
+  allowance?: 'ready' | 'confirming' | 'unconfirmed' | 'failed'
+  allowanceReady?: boolean
+  merchantRef?: string
+}
+
 export type VerifyWebhookOptions = {
   /** kid -> base64url public key. Default: the API's own, from `capabilities()`, fetched once and cached. */
   keys?: Record<string, string>
@@ -625,6 +642,18 @@ export type SubscriptionTerms = {
   allowance?: AllowanceMode
   /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
   merchantRef?: string
+  /**
+   * Optional webhook (public https): the moment the buyer signs, P2Flux POSTs a signed `subscription.created` event
+   * there with the subscription reference - from any device. USE IT: the checkout window's own message reaches your
+   * page only when the buyer finishes in the window your page opened, not in a phone wallet's browser. Answer it with
+   * `handleSubscriptionCreated`. Refused (429) when your daily webhook budget is used up. API from 2026-11-21.
+   */
+  notifyUrl?: string
+  /**
+   * Optional: a checkout running alone shows "Back to <your host>" after signing, with `p2flux_subscription` (the
+   * public id) and `p2flux_status` (`authorized` | `approval_needed` | `expired`). It proves nothing: act on the webhook.
+   */
+  returnUrl?: string
 }
 
 export type SubscriptionSetup = {
@@ -638,6 +667,11 @@ export type SubscriptionSetup = {
   amount: string
   /** Ties a returned capability back to THIS checkout - compare before attaching it to an order. */
   salt: string
+  /** Unix seconds until which the hosted checkout lets this setup be signed (about 15 minutes). Create a new setup for every attempt. */
+  checkoutValidUntil?: number
+  /** Echoed when the API accepted them. */
+  notifyUrl?: string
+  returnUrl?: string
   /** Present when created with `merchantRef`. */
   merchantRef?: string
   /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
@@ -1618,6 +1652,8 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.end === undefined ? {} : { end: terms.end }),
         ...(terms.allowance === undefined ? {} : { allowance: terms.allowance }),
         ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
+        ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
+        ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
       })
       return {
         setupToken: body.setup_token as string,
@@ -1626,8 +1662,81 @@ export function createP2Flux(options: P2FluxOptions) {
         contract: body.contract as string,
         amount: body.amount as string,
         salt: body.salt as string,
+        ...(typeof body.checkout_valid_until === 'number' ? { checkoutValidUntil: body.checkout_valid_until } : {}),
+        ...(typeof body.notify_url === 'string' ? { notifyUrl: body.notify_url } : {}),
+        ...(typeof body.return_url === 'string' ? { returnUrl: body.return_url } : {}),
         ...refEcho(body),
         raw: body,
+      }
+    },
+
+    /**
+     * Answer a `subscription.created` webhook: the buyer signed the subscription you set up with `notifyUrl`.
+     * Pass the RAW body (a string), the `p2flux-signature` header and the `salt` createSubscription returned for the
+     * setup you are waiting on.
+     *
+     * Confirmed means: signed by P2Flux, for exactly that setup (salt), and the API itself reads the same terms out of
+     * the reference. `subscription` is then the reference `charge()` needs: store it and collect the first payment,
+     * idempotently on `dedupeKey` (the subscription id - the same subscription can be announced twice, the second
+     * time with `allowanceReady` true). The salt is what makes it yours: anyone can create a setup naming your wallet,
+     * your webhook and one of your order numbers at a lower price, so never act on `merchantRef` alone.
+     * `allowanceReady: false` is not "do not charge": try, and retry later on INSUFFICIENT_ALLOWANCE.
+     * One subscription per customer and plan is yours to enforce: two checkouts by one buyer are two subscriptions.
+     *
+     * `confirmed: false`: answer 2xx and do nothing for NOT_YOUR_SETUP, TERMS_MISMATCH, UNKNOWN_EVENT, MALFORMED;
+     * answer 4xx/5xx for WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD. Throws when the API cannot be asked right now:
+     * answer 5xx and P2Flux sends it again.
+     */
+    async handleSubscriptionCreated(
+      rawBody: string,
+      signature: string,
+      expect: { salt: string; recipient?: string; amountUnits?: string; period?: number } & VerifyWebhookOptions,
+    ): Promise<SubscriptionCreatedResult> {
+      if (!expect || typeof expect.salt !== 'string' || !/^\d{1,78}$/.test(expect.salt)) throw new TypeError('handleSubscriptionCreated needs the salt createSubscription returned')
+      if (typeof rawBody !== 'string') throw new TypeError('handleSubscriptionCreated needs the raw body as a string')
+      try {
+        await client.verifyWebhook(rawBody, signature ?? '', expect)
+      } catch (err) {
+        if (err instanceof P2FluxError && err.action === 'INVALID_REQUEST') return { confirmed: false, eventId: '', type: '', reason: err.status }
+        throw err
+      }
+      let event: Record<string, unknown> = {}
+      try {
+        event = JSON.parse(rawBody) as Record<string, unknown>
+      } catch {
+        return { confirmed: false, eventId: '', type: '', reason: 'MALFORMED' }
+      }
+      const eventId = typeof event?.id === 'string' ? event.id : ''
+      const type = typeof event?.type === 'string' ? event.type : ''
+      const data = (event?.data && typeof event.data === 'object' ? event.data : {}) as Record<string, unknown>
+      const no = (reason: string): SubscriptionCreatedResult => ({ confirmed: false, eventId, type, reason })
+      if (type !== 'subscription.created') return no('UNKNOWN_EVENT')
+      if (typeof data.subscription !== 'string' || typeof data.subscription_id !== 'string' || typeof data.salt !== 'string') return no('MALFORMED')
+      // Read locally first: an event for somebody else's setup costs no API call.
+      if (data.salt !== expect.salt) return no('NOT_YOUR_SETUP')
+      // The reference is the API's own token: what IT says the terms are is what a charge will collect.
+      let terms: Record<string, unknown>
+      try {
+        terms = ((await client.status(data.subscription)).raw.terms ?? {}) as Record<string, unknown>
+      } catch (err) {
+        if (err instanceof P2FluxError && err.action === 'INVALID_REQUEST') return no(err.status)
+        throw err
+      }
+      if (String(terms.salt ?? '') !== expect.salt) return no('NOT_YOUR_SETUP')
+      const same = (key: string, want: unknown) => want === undefined || String(terms[key] ?? '').toLowerCase() === String(want).toLowerCase()
+      if (!same('recipient', expect.recipient) || !same('amount_units', expect.amountUnits) || !same('period', expect.period)) return no('TERMS_MISMATCH')
+      const id = data.subscription_id.toLowerCase()
+      return {
+        confirmed: true,
+        eventId,
+        type,
+        dedupeKey: id,
+        subscription: data.subscription,
+        subscriptionId: id,
+        payer: typeof data.payer === 'string' ? data.payer.toLowerCase() : '',
+        allowance: typeof data.allowance === 'string' ? (data.allowance as SubscriptionCreatedResult['allowance']) : 'unconfirmed',
+        allowanceReady: data.allowance_ready === true,
+        ...(typeof data.merchant_ref === 'string' ? { merchantRef: data.merchant_ref } : {}),
       }
     },
 

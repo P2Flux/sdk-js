@@ -412,6 +412,22 @@ export type WebhookSigningKey = {
     alg: 'Ed25519';
     publicKey: string;
 };
+/** The answer of `handleSubscriptionCreated`. */
+export type SubscriptionCreatedResult = {
+    confirmed: boolean;
+    eventId: string;
+    type: string;
+    reason?: string;
+    /** The subscription id: act once per subscription, however often it is announced. */
+    dedupeKey?: string;
+    /** The reference `charge()` needs. Store it with your order. */
+    subscription?: string;
+    subscriptionId?: string;
+    payer?: string;
+    allowance?: 'ready' | 'confirming' | 'unconfirmed' | 'failed';
+    allowanceReady?: boolean;
+    merchantRef?: string;
+};
 export type VerifyWebhookOptions = {
     /** kid -> base64url public key. Default: the API's own, from `capabilities()`, fetched once and cached. */
     keys?: Record<string, string>;
@@ -490,6 +506,18 @@ export type SubscriptionTerms = {
     allowance?: AllowanceMode;
     /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
     merchantRef?: string;
+    /**
+     * Optional webhook (public https): the moment the buyer signs, P2Flux POSTs a signed `subscription.created` event
+     * there with the subscription reference - from any device. USE IT: the checkout window's own message reaches your
+     * page only when the buyer finishes in the window your page opened, not in a phone wallet's browser. Answer it with
+     * `handleSubscriptionCreated`. Refused (429) when your daily webhook budget is used up. API from 2026-11-21.
+     */
+    notifyUrl?: string;
+    /**
+     * Optional: a checkout running alone shows "Back to <your host>" after signing, with `p2flux_subscription` (the
+     * public id) and `p2flux_status` (`authorized` | `approval_needed` | `expired`). It proves nothing: act on the webhook.
+     */
+    returnUrl?: string;
 };
 export type SubscriptionSetup = {
     /** Signed setup token. Put it in the checkout link fragment: `#/subscribe/<setup_token>`. */
@@ -502,6 +530,11 @@ export type SubscriptionSetup = {
     amount: string;
     /** Ties a returned capability back to THIS checkout - compare before attaching it to an order. */
     salt: string;
+    /** Unix seconds until which the hosted checkout lets this setup be signed (about 15 minutes). Create a new setup for every attempt. */
+    checkoutValidUntil?: number;
+    /** Echoed when the API accepted them. */
+    notifyUrl?: string;
+    returnUrl?: string;
     /** Present when created with `merchantRef`. */
     merchantRef?: string;
     /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
@@ -901,6 +934,29 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * Keep the returned `salt`: it is how you prove a returned capability came from THIS checkout.
      */
     createSubscription(terms: SubscriptionTerms): Promise<SubscriptionSetup>;
+    /**
+     * Answer a `subscription.created` webhook: the buyer signed the subscription you set up with `notifyUrl`.
+     * Pass the RAW body (a string), the `p2flux-signature` header and the `salt` createSubscription returned for the
+     * setup you are waiting on.
+     *
+     * Confirmed means: signed by P2Flux, for exactly that setup (salt), and the API itself reads the same terms out of
+     * the reference. `subscription` is then the reference `charge()` needs: store it and collect the first payment,
+     * idempotently on `dedupeKey` (the subscription id - the same subscription can be announced twice, the second
+     * time with `allowanceReady` true). The salt is what makes it yours: anyone can create a setup naming your wallet,
+     * your webhook and one of your order numbers at a lower price, so never act on `merchantRef` alone.
+     * `allowanceReady: false` is not "do not charge": try, and retry later on INSUFFICIENT_ALLOWANCE.
+     * One subscription per customer and plan is yours to enforce: two checkouts by one buyer are two subscriptions.
+     *
+     * `confirmed: false`: answer 2xx and do nothing for NOT_YOUR_SETUP, TERMS_MISMATCH, UNKNOWN_EVENT, MALFORMED;
+     * answer 4xx/5xx for WEBHOOK_SIGNATURE_INVALID / WEBHOOK_TOO_OLD. Throws when the API cannot be asked right now:
+     * answer 5xx and P2Flux sends it again.
+     */
+    handleSubscriptionCreated(rawBody: string, signature: string, expect: {
+        salt: string;
+        recipient?: string;
+        amountUnits?: string;
+        period?: number;
+    } & VerifyWebhookOptions): Promise<SubscriptionCreatedResult>;
     /**
      * The authoritative terms plus the exact EIP-712 payload the customer's wallet must sign.
      *
