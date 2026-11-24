@@ -225,6 +225,14 @@ pay any payment through Hinkal's own app, with or without this option, so check 
 `accounting.refundable === false` (and `screening: 'unknown'`) means refund it by hand, to an address
 the buyer gives you. [Private payments](https://p2flux.com/docs/payments.html#private)
 
+### Contracts v2: `contractVersion`
+
+Where the API has the v2 contracts switched on (Base Sepolia today), `contractVersion: 2` on `createPayment` or
+`createSubscription` settles through them: fees come from the on-chain fee registry and are stated in the answer
+(`fees` / `feeBps`, plus `pendingChange` when a change is scheduled). `gasPaymentMode: 'auto'` (v2 only) lets the
+buyer pay gas in ETH or, without ETH, in USDC. Omit `contractVersion` and nothing changes. Elsewhere the API
+answers `INVALID_REQUEST` with `raw.reason` `CONTRACTS_V2_UNAVAILABLE`.
+
 ## Pay the network fee in USDC
 
 A buyer holding USDC and **no ETH** can still pay. They sign a token authorization; P2Flux submits

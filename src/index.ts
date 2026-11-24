@@ -110,6 +110,12 @@ export type ChargeStatus =
   | 'PERMISSION_NOT_FOUND'
   | 'TRANSACTION_NOT_FOUND'
   | 'PAYMENT_ALREADY_PROCESSED'
+  /* Contracts v2: these exact terms were settled through ANOTHER P2Flux contract (v1 or v2). Not paid:
+   * treat it as a duplicate or unrelated settlement. Nothing more is offered for this order. */
+  | 'SETTLED_ELSEWHERE'
+  /* RecurringV2: at the current registry rates the amount no longer covers the fees, so P2Flux cannot run
+   * the charge. The subscription is still valid: raise the price or have the payer sign again. */
+  | 'AMOUNT_BELOW_FEES'
   | 'WRONG_SPENDER'
   | 'WRONG_TOKEN'
   | 'INVALID_EXTRA_DATA'
@@ -181,6 +187,9 @@ export type PreparedTransaction = {
   data: string
   description: string
   payer?: string
+  /** `prepareAllowanceRevocation({ contractVersion: 2 })`: 2 and the RecurringV2 contract the allowance is removed from. */
+  contractVersion?: 2
+  spender?: string
 }
 
 /**
@@ -349,11 +358,31 @@ const refundBody = (original: RefundOriginal): Record<string, unknown> => {
  */
 export type GasPaymentMode = 'native' | 'payment_token'
 
+/**
+ * Which P2Flux contracts settle an order. Omit it (or 1) for the v1 contracts, unchanged. 2 uses the v2
+ * contracts (fees from the on-chain fee registry), only where the API has them switched on - else
+ * `INVALID_REQUEST` with `raw.reason` `CONTRACTS_V2_UNAVAILABLE`.
+ */
+export type ContractVersion = 1 | 2
+
+/** A fee change the v2 fee registry has scheduled (`effectiveAt` unix seconds). */
+export type PendingFeeChange = {
+  feeBps: number
+  fixedNetworkFeeUnits: string
+  partnerRate: boolean
+  effectiveAt: number
+}
+
 export type PaymentTerms = {
   recipient: string
   amount: string
-  /** Omit for `native`. Existing integrations keep their current behaviour and fees exactly. */
-  gasPaymentMode?: GasPaymentMode
+  /**
+   * Omit for `native`. Existing integrations keep their current behaviour and fees exactly. `auto` (with
+   * `contractVersion: 2` only): the buyer pays gas in ETH when they have it, else in USDC.
+   */
+  gasPaymentMode?: GasPaymentMode | 'auto'
+  /** Optional: 2 settles through the v2 contracts (see `ContractVersion`). Omit for v1. */
+  contractVersion?: ContractVersion
   /**
    * Optional webhook: a public https URL P2Flux POSTs a `payment.paid` event to once this payment is
    * verified on chain. Omit it and nothing changes. Answer it with `handleNotification`.
@@ -466,7 +495,23 @@ export type PaymentIntent = {
   /** Present (true) when the payment also allows paying from an exchange. */
   exchange?: boolean
   exchangeToleranceBps?: number
+  /** 2 when created with `contractVersion: 2`. */
+  contractVersion?: 2
+  /** The fee split in base units, when the API states it. v2 adds the registry rate and any scheduled change. */
+  fees?: PaymentFees
   raw: Record<string, unknown>
+}
+
+export type PaymentFees = {
+  paymentFeeUnits: string
+  fixedNetworkFeeUnits: string
+  merchantNetUnits: string
+  /** v2 only. */
+  feeBps?: number
+  partnerRate?: boolean
+  /** v2 only, when the registry has a change scheduled: the nearest one, and all of them. */
+  pendingChange?: PendingFeeChange
+  pendingChanges?: PendingFeeChange[]
 }
 
 /** The authoritative terms a checkout should display, read back from an intent. */
@@ -481,7 +526,10 @@ export type ResolvedPayment = {
   expiresAt: number
   /** How many confirmations a verify will wait for; null when the API leaves it to its default. */
   confirmationsRequired: number | null
-  gasPaymentMode: GasPaymentMode
+  /** `auto` only on a v2 payment created with it. */
+  gasPaymentMode: GasPaymentMode | 'auto'
+  /** 2 for a v2 payment. */
+  contractVersion?: 2
   /** Present only in `payment_token` mode: what the buyer will pay for the network, and until when. */
   networkFeeQuote?: NetworkFeeQuote
   /** Present when the payment carries a return URL. */
@@ -666,6 +714,8 @@ export type PaymentVerification =
       code: ChargeStatus
       /** Local guidance for the code: WAIT means poll the same hash, INVALID_REQUEST means stop. */
       action: MerchantAction
+      /** Extra detail where the API gives one, e.g. `UNRELATED_SETTLEMENT_SAME_REFERENCE` with `INVALID_REFERENCE`. */
+      reason?: string
       raw: Record<string, unknown>
     }
 
@@ -704,6 +754,8 @@ export type SubscriptionTerms = {
    * public id) and `p2flux_status` (`authorized` | `approval_needed` | `expired`). It proves nothing: act on the webhook.
    */
   returnUrl?: string
+  /** Optional: 2 uses RecurringV2 (renewal fee from the fee registry, at least 1 USDC per period). Omit for v1. */
+  contractVersion?: ContractVersion
 }
 
 export type SubscriptionSetup = {
@@ -726,6 +778,11 @@ export type SubscriptionSetup = {
   merchantRef?: string
   /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
   merchantRefVerified?: boolean
+  /** v2 only: 2, the registry's renewal fee, and any fee change it has scheduled. */
+  contractVersion?: 2
+  feeBps?: number
+  pendingChange?: PendingFeeChange
+  pendingChanges?: PendingFeeChange[]
   raw: Record<string, unknown>
 }
 
@@ -748,6 +805,8 @@ export type ResolvedSubscription = {
   networkFeeEstimate: string | null
   expiresAt: number
   typedData: Record<string, unknown>
+  /** 2 for a RecurringV2 setup (its `typedData` domain is "P2FluxRecurring" version "2"). */
+  contractVersion?: 2
   /** Only when resolved in `payment_token` mode: what the customer signs instead of approving. */
   sponsorship?: SubscriptionSponsorship
   /** Present when created with `merchantRef`. */
@@ -872,6 +931,9 @@ const ACTIONS: Record<string, MerchantAction> = {
   INVALID_EXTRA_DATA: 'INVALID_REQUEST',
   // A settled intent cannot settle twice; retrying will not change the answer.
   PAYMENT_ALREADY_PROCESSED: 'INVALID_REQUEST',
+  SETTLED_ELSEWHERE: 'INVALID_REQUEST',
+  // The merchant's price to fix - never STOP_SUBSCRIPTION, the subscription itself is still valid.
+  AMOUNT_BELOW_FEES: 'INVALID_REQUEST',
   // The transaction may still be propagating or mining - the same question can have a new answer.
   TRANSACTION_NOT_FOUND: 'RETRY_LATER',
   /* The customer's contract wallet costs more to validate than the API will spend. Only the
@@ -1296,6 +1358,27 @@ const exchangeEcho = (body: Record<string, unknown>) => ({
   ...(typeof body.exchange_tolerance_bps === 'number' ? { exchangeToleranceBps: body.exchange_tolerance_bps } : {}),
 })
 
+/* Contracts v2: present only on v2 answers, so a v1 answer reads exactly as before. */
+const v2Echo = (body: Record<string, unknown>) => (body.contract_version === 2 ? { contractVersion: 2 as const } : {})
+const pendingFeeChange = (p: Record<string, unknown>): PendingFeeChange => ({
+  feeBps: p.fee_bps as number,
+  fixedNetworkFeeUnits: p.fixed_network_fee_units as string,
+  partnerRate: p.partner_rate as boolean,
+  effectiveAt: p.effective_at as number,
+})
+const pendingOf = (b: Record<string, unknown>) => ({
+  ...(b.pending_change && typeof b.pending_change === 'object' ? { pendingChange: pendingFeeChange(b.pending_change as Record<string, unknown>) } : {}),
+  ...(Array.isArray(b.pending_changes) ? { pendingChanges: (b.pending_changes as Record<string, unknown>[]).map(pendingFeeChange) } : {}),
+})
+const paymentFees = (f: Record<string, unknown>): PaymentFees => ({
+  paymentFeeUnits: f.payment_fee_units as string,
+  fixedNetworkFeeUnits: f.fixed_network_fee_units as string,
+  merchantNetUnits: f.merchant_net_units as string,
+  ...(typeof f.fee_bps === 'number' ? { feeBps: f.fee_bps } : {}),
+  ...(typeof f.partner_rate === 'boolean' ? { partnerRate: f.partner_rate } : {}),
+  ...pendingOf(f),
+})
+
 const hexBytes = (hex: string) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16))
 
 /**
@@ -1521,6 +1604,7 @@ export function createP2Flux(options: P2FluxOptions) {
         recipient: terms.recipient,
         amount: terms.amount,
         ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+        ...(terms.contractVersion === undefined ? {} : { contract_version: terms.contractVersion }),
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
         ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
@@ -1548,13 +1632,18 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}),
         ...merchantRefOf(body),
         ...exchangeEcho(body),
+        ...v2Echo(body),
+        ...(body.fees && typeof body.fees === 'object' ? { fees: paymentFees(body.fees as Record<string, unknown>) } : {}),
         raw: body,
       }
     },
 
-    /** The authoritative terms for a checkout to display, read back from the intent itself. */
-    async resolvePayment(intent: string): Promise<ResolvedPayment> {
-      const body = await postOrThrow('/v1/payments/resolve', { intent })
+    /**
+     * The authoritative terms for a checkout to display, read back from the intent itself.
+     * `sponsored: true` (v2 `auto` payments only, buyer without ETH) also prices the sponsored payment.
+     */
+    async resolvePayment(intent: string, options: { sponsored?: boolean } = {}): Promise<ResolvedPayment> {
+      const body = await postOrThrow('/v1/payments/resolve', { intent, ...(options.sponsored === true ? { sponsored: true } : {}) })
       return {
         recipient: body.recipient as string,
         amount: body.amount as string,
@@ -1565,7 +1654,8 @@ export function createP2Flux(options: P2FluxOptions) {
         reference: body.reference as string,
         expiresAt: body.expires_at as number,
         confirmationsRequired: (body.confirmations_required ?? null) as number | null,
-        gasPaymentMode: (body.gas_payment_mode ?? 'native') as GasPaymentMode,
+        gasPaymentMode: (body.gas_payment_mode ?? 'native') as GasPaymentMode | 'auto',
+        ...v2Echo(body),
         ...(body.network_fee_quote === undefined
           ? {}
           : { networkFeeQuote: networkFeeQuote(body.network_fee_quote as Record<string, unknown>) }),
@@ -1781,7 +1871,7 @@ export function createP2Flux(options: P2FluxOptions) {
         }
       }
       const code = ((body.code as string) ?? 'INTERNAL_ERROR') as ChargeStatus
-      return { valid: false, code, action: ACTIONS[code] ?? 'RETRY_LATER', raw: body }
+      return { valid: false, code, action: ACTIONS[code] ?? 'RETRY_LATER', ...(typeof body.reason === 'string' ? { reason: body.reason } : {}), raw: body }
     },
 
     /**
@@ -1802,6 +1892,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
         ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+        ...(terms.contractVersion === undefined ? {} : { contract_version: terms.contractVersion }),
       })
       return {
         setupToken: body.setup_token as string,
@@ -1814,6 +1905,9 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(typeof body.notify_url === 'string' ? { notifyUrl: body.notify_url } : {}),
         ...(typeof body.return_url === 'string' ? { returnUrl: body.return_url } : {}),
         ...refEcho(body),
+        ...v2Echo(body),
+        ...(typeof body.fee_bps === 'number' ? { feeBps: body.fee_bps } : {}),
+        ...pendingOf(body),
         raw: body,
       }
     },
@@ -1923,6 +2017,7 @@ export function createP2Flux(options: P2FluxOptions) {
         networkFeeEstimate: (body.network_fee_estimate ?? null) as string | null,
         expiresAt: body.expires_at as number,
         typedData: (body.typed_data ?? {}) as Record<string, unknown>,
+        ...v2Echo(body),
         ...(body.sponsorship_quote === undefined
           ? {}
           : {
@@ -2439,14 +2534,22 @@ export function createP2Flux(options: P2FluxOptions) {
       return postOrThrow('/v1/webhooks/redeliver', { ...token, event_id: eventId })
     },
 
-    /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */
-    async prepareAllowanceRevocation(): Promise<PreparedTransaction> {
-      const body = await postOrThrow('/v1/allowances/revoke/prepare', {})
+    /**
+     * Calldata that removes the token allowance entirely - stops every P2Flux subscription.
+     * `contractVersion: 2` removes the allowance given to RecurringV2 instead (v2 subscriptions).
+     */
+    async prepareAllowanceRevocation(options: { contractVersion?: ContractVersion } = {}): Promise<PreparedTransaction> {
+      const body = await postOrThrow(
+        '/v1/allowances/revoke/prepare',
+        options.contractVersion === undefined ? {} : { contract_version: options.contractVersion },
+      )
       return {
         chainId: body.chain_id as number,
         to: body.to as string,
         data: body.data as string,
         description: body.description as string,
+        ...v2Echo(body),
+        ...(typeof body.spender === 'string' ? { spender: body.spender } : {}),
       }
     },
 

@@ -14,6 +14,16 @@
 
 All additive; needs an API with exchange payments (an older one refuses `exchange`).
 
+- **Contracts v2.** `contractVersion` (1 | 2) on `createPayment` and `createSubscription`, and
+  `prepareAllowanceRevocation({ contractVersion: 2 })` for the RecurringV2 allowance (adds `spender`).
+  `gasPaymentMode: 'auto'` on `createPayment` (v2 only). Read back: `contractVersion` on create/resolve answers,
+  `fees` on `createPayment` (`feeBps`, `partnerRate`, `pendingChange` / `pendingChanges` on v2), `feeBps` and
+  `pendingChange(s)` on a v2 `createSubscription`. `resolvePayment(intent, { sponsored: true })` prices the
+  sponsored path of a v2 `auto` payment. New codes `SETTLED_ELSEWHERE` and `AMOUNT_BELOW_FEES` (both
+  `INVALID_REQUEST`); a `valid: false` verify carries `reason` when the API gives one. Omitted, nothing is sent and
+  nothing changes; needs an API with contracts v2 switched on (else `INVALID_REQUEST`, `raw.reason`
+  `CONTRACTS_V2_UNAVAILABLE`).
+
 ## 0.15.0 - 2026-11-04
 
 ### Added

@@ -95,6 +95,9 @@ const ACTIONS = {
     INVALID_EXTRA_DATA: 'INVALID_REQUEST',
     // A settled intent cannot settle twice; retrying will not change the answer.
     PAYMENT_ALREADY_PROCESSED: 'INVALID_REQUEST',
+    SETTLED_ELSEWHERE: 'INVALID_REQUEST',
+    // The merchant's price to fix - never STOP_SUBSCRIPTION, the subscription itself is still valid.
+    AMOUNT_BELOW_FEES: 'INVALID_REQUEST',
     // The transaction may still be propagating or mining - the same question can have a new answer.
     TRANSACTION_NOT_FOUND: 'RETRY_LATER',
     /* The customer's contract wallet costs more to validate than the API will spend. Only the
@@ -307,6 +310,26 @@ const exchangePayment = (body) => {
 const exchangeEcho = (body) => ({
     ...(body.exchange === true ? { exchange: true } : {}),
     ...(typeof body.exchange_tolerance_bps === 'number' ? { exchangeToleranceBps: body.exchange_tolerance_bps } : {}),
+});
+/* Contracts v2: present only on v2 answers, so a v1 answer reads exactly as before. */
+const v2Echo = (body) => (body.contract_version === 2 ? { contractVersion: 2 } : {});
+const pendingFeeChange = (p) => ({
+    feeBps: p.fee_bps,
+    fixedNetworkFeeUnits: p.fixed_network_fee_units,
+    partnerRate: p.partner_rate,
+    effectiveAt: p.effective_at,
+});
+const pendingOf = (b) => ({
+    ...(b.pending_change && typeof b.pending_change === 'object' ? { pendingChange: pendingFeeChange(b.pending_change) } : {}),
+    ...(Array.isArray(b.pending_changes) ? { pendingChanges: b.pending_changes.map(pendingFeeChange) } : {}),
+});
+const paymentFees = (f) => ({
+    paymentFeeUnits: f.payment_fee_units,
+    fixedNetworkFeeUnits: f.fixed_network_fee_units,
+    merchantNetUnits: f.merchant_net_units,
+    ...(typeof f.fee_bps === 'number' ? { feeBps: f.fee_bps } : {}),
+    ...(typeof f.partner_rate === 'boolean' ? { partnerRate: f.partner_rate } : {}),
+    ...pendingOf(f),
 });
 const hexBytes = (hex) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16));
 /**
@@ -523,6 +546,7 @@ export function createP2Flux(options) {
                 recipient: terms.recipient,
                 amount: terms.amount,
                 ...(terms.gasPaymentMode === undefined ? {} : { gas_payment_mode: terms.gasPaymentMode }),
+                ...(terms.contractVersion === undefined ? {} : { contract_version: terms.contractVersion }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
@@ -550,12 +574,17 @@ export function createP2Flux(options) {
                 ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
                 ...merchantRefOf(body),
                 ...exchangeEcho(body),
+                ...v2Echo(body),
+                ...(body.fees && typeof body.fees === 'object' ? { fees: paymentFees(body.fees) } : {}),
                 raw: body,
             };
         },
-        /** The authoritative terms for a checkout to display, read back from the intent itself. */
-        async resolvePayment(intent) {
-            const body = await postOrThrow('/v1/payments/resolve', { intent });
+        /**
+         * The authoritative terms for a checkout to display, read back from the intent itself.
+         * `sponsored: true` (v2 `auto` payments only, buyer without ETH) also prices the sponsored payment.
+         */
+        async resolvePayment(intent, options = {}) {
+            const body = await postOrThrow('/v1/payments/resolve', { intent, ...(options.sponsored === true ? { sponsored: true } : {}) });
             return {
                 recipient: body.recipient,
                 amount: body.amount,
@@ -567,6 +596,7 @@ export function createP2Flux(options) {
                 expiresAt: body.expires_at,
                 confirmationsRequired: (body.confirmations_required ?? null),
                 gasPaymentMode: (body.gas_payment_mode ?? 'native'),
+                ...v2Echo(body),
                 ...(body.network_fee_quote === undefined
                     ? {}
                     : { networkFeeQuote: networkFeeQuote(body.network_fee_quote) }),
@@ -759,7 +789,7 @@ export function createP2Flux(options) {
                 };
             }
             const code = (body.code ?? 'INTERNAL_ERROR');
-            return { valid: false, code, action: ACTIONS[code] ?? 'RETRY_LATER', raw: body };
+            return { valid: false, code, action: ACTIONS[code] ?? 'RETRY_LATER', ...(typeof body.reason === 'string' ? { reason: body.reason } : {}), raw: body };
         },
         /**
          * Create subscription terms and a signed setup token.
@@ -779,6 +809,7 @@ export function createP2Flux(options) {
                 ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
                 ...(terms.notifyUrl === undefined ? {} : { notify_url: terms.notifyUrl }),
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
+                ...(terms.contractVersion === undefined ? {} : { contract_version: terms.contractVersion }),
             });
             return {
                 setupToken: body.setup_token,
@@ -791,6 +822,9 @@ export function createP2Flux(options) {
                 ...(typeof body.notify_url === 'string' ? { notifyUrl: body.notify_url } : {}),
                 ...(typeof body.return_url === 'string' ? { returnUrl: body.return_url } : {}),
                 ...refEcho(body),
+                ...v2Echo(body),
+                ...(typeof body.fee_bps === 'number' ? { feeBps: body.fee_bps } : {}),
+                ...pendingOf(body),
                 raw: body,
             };
         },
@@ -903,6 +937,7 @@ export function createP2Flux(options) {
                 networkFeeEstimate: (body.network_fee_estimate ?? null),
                 expiresAt: body.expires_at,
                 typedData: (body.typed_data ?? {}),
+                ...v2Echo(body),
                 ...(body.sponsorship_quote === undefined
                     ? {}
                     : {
@@ -1372,14 +1407,19 @@ export function createP2Flux(options) {
         async redeliverWebhook(token, eventId) {
             return postOrThrow('/v1/webhooks/redeliver', { ...token, event_id: eventId });
         },
-        /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */
-        async prepareAllowanceRevocation() {
-            const body = await postOrThrow('/v1/allowances/revoke/prepare', {});
+        /**
+         * Calldata that removes the token allowance entirely - stops every P2Flux subscription.
+         * `contractVersion: 2` removes the allowance given to RecurringV2 instead (v2 subscriptions).
+         */
+        async prepareAllowanceRevocation(options = {}) {
+            const body = await postOrThrow('/v1/allowances/revoke/prepare', options.contractVersion === undefined ? {} : { contract_version: options.contractVersion });
             return {
                 chainId: body.chain_id,
                 to: body.to,
                 data: body.data,
                 description: body.description,
+                ...v2Echo(body),
+                ...(typeof body.spender === 'string' ? { spender: body.spender } : {}),
             };
         },
         /**

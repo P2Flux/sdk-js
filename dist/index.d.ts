@@ -14,7 +14,7 @@
  * with settlement receipts, recovery, subscription setup/finalize/charge/status, cancellation,
  * allowance revocation, refunds. No raw REST calls are needed for a normal integration.
  */
-export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_LINK' | 'LINK_EXPIRED' | 'LINK_UNAVAILABLE' | 'ALREADY_SUBSCRIBED' | 'PAYER_SANCTIONED' | 'RECIPIENT_SANCTIONED' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT' | 'WEBHOOK_SIGNATURE_INVALID' | 'WEBHOOK_TOO_OLD';
+export type ChargeStatus = 'CHARGED' | 'ALREADY_CHARGED' | 'CONFIRMING' | 'PAYMENT_CONFIRMING' | 'PAYMENT_NOT_FOUND' | 'PAYMENT_RECOVERY_INCONSISTENT' | 'RECOVERY_UNAVAILABLE' | 'REFUNDED' | 'REFUND_CONFIRMING' | 'REFUND_AMOUNT_INVALID' | 'REFUND_WRONG_MERCHANT' | 'REFUND_TRANSACTION_MISMATCH' | 'REFUND_ORIGINAL_PAYMENT_INVALID' | 'INVALID_REFUND_TOKEN' | 'REFUND_TOKEN_EXPIRED' | 'NOT_DUE' | 'INSUFFICIENT_BALANCE' | 'INSUFFICIENT_ALLOWANCE' | 'PERMISSION_REVOKED' | 'SUBSCRIPTION_EXPIRED' | 'INVALID_SUBSCRIPTION' | 'INVALID_REQUEST' | 'AMOUNT_OUT_OF_BOUNDS' | 'PERIOD_OUT_OF_BOUNDS' | 'RPC_ERROR' | 'RELAYER_ERROR' | 'TRANSACTION_REVERTED' | 'INTERNAL_ERROR' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'CONCURRENCY_LIMIT' | 'GAS_TOO_HIGH' | 'GAS_QUOTE_UNAVAILABLE' | 'GAS_FEE_TOO_HIGH' | 'RELAYER_TX_COST_TOO_HIGH' | 'RELAYER_BUDGET_EXCEEDED' | 'RELAYER_NOT_READY' | 'RPC_BUSY' | 'PAYMENT_TOKEN_GAS_UNSUPPORTED' | 'PAYMENT_TOKEN_GAS_UNAVAILABLE' | 'PAYMENT_TOKEN_GAS_QUOTE_EXPIRED' | 'PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED' | 'INVALID_GAS_QUOTE' | 'INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS' | 'SPONSORED_TRANSACTION_FAILED' | 'SPONSORED_PERMIT_FAILED' | 'SPONSORSHIP_CONFIRMING' | 'INVALID_INTENT' | 'INTENT_EXPIRED' | 'INVALID_REFERENCE' | 'INVALID_LINK' | 'LINK_EXPIRED' | 'LINK_UNAVAILABLE' | 'ALREADY_SUBSCRIBED' | 'PAYER_SANCTIONED' | 'RECIPIENT_SANCTIONED' | 'INVALID_SETUP_TOKEN' | 'SETUP_TOKEN_EXPIRED' | 'INVALID_CANCEL_TOKEN' | 'CANCEL_TOKEN_EXPIRED' | 'TERMS_MISMATCH' | 'PERMISSION_NOT_FOUND' | 'TRANSACTION_NOT_FOUND' | 'PAYMENT_ALREADY_PROCESSED' | 'SETTLED_ELSEWHERE' | 'AMOUNT_BELOW_FEES' | 'WRONG_SPENDER' | 'WRONG_TOKEN' | 'INVALID_EXTRA_DATA' | 'INVALID_SIGNATURE' | 'SIGNATURE_VALIDATION_TOO_EXPENSIVE' | 'UNSUPPORTED_SIGNATURE_FORMAT' | 'WEBHOOK_SIGNATURE_INVALID' | 'WEBHOOK_TOO_OLD';
 export type MerchantAction = 'SUCCESS' | 'WAIT' | 'RETRY_LATER' | 'CUSTOMER_ACTION_REQUIRED' | 'STOP_SUBSCRIPTION' | 'INVALID_REQUEST';
 export type ChargeResult = {
     status: ChargeStatus;
@@ -63,6 +63,9 @@ export type PreparedTransaction = {
     data: string;
     description: string;
     payer?: string;
+    /** `prepareAllowanceRevocation({ contractVersion: 2 })`: 2 and the RecurringV2 contract the allowance is removed from. */
+    contractVersion?: 2;
+    spender?: string;
 };
 /**
  * Which settlement is being refunded: a one-time payment, or one period of a subscription.
@@ -214,11 +217,29 @@ export type RefundVerification = {
  * service fee. Ask `capabilities()` before offering it; not every network and token supports it.
  */
 export type GasPaymentMode = 'native' | 'payment_token';
+/**
+ * Which P2Flux contracts settle an order. Omit it (or 1) for the v1 contracts, unchanged. 2 uses the v2
+ * contracts (fees from the on-chain fee registry), only where the API has them switched on - else
+ * `INVALID_REQUEST` with `raw.reason` `CONTRACTS_V2_UNAVAILABLE`.
+ */
+export type ContractVersion = 1 | 2;
+/** A fee change the v2 fee registry has scheduled (`effectiveAt` unix seconds). */
+export type PendingFeeChange = {
+    feeBps: number;
+    fixedNetworkFeeUnits: string;
+    partnerRate: boolean;
+    effectiveAt: number;
+};
 export type PaymentTerms = {
     recipient: string;
     amount: string;
-    /** Omit for `native`. Existing integrations keep their current behaviour and fees exactly. */
-    gasPaymentMode?: GasPaymentMode;
+    /**
+     * Omit for `native`. Existing integrations keep their current behaviour and fees exactly. `auto` (with
+     * `contractVersion: 2` only): the buyer pays gas in ETH when they have it, else in USDC.
+     */
+    gasPaymentMode?: GasPaymentMode | 'auto';
+    /** Optional: 2 settles through the v2 contracts (see `ContractVersion`). Omit for v1. */
+    contractVersion?: ContractVersion;
     /**
      * Optional webhook: a public https URL P2Flux POSTs a `payment.paid` event to once this payment is
      * verified on chain. Omit it and nothing changes. Answer it with `handleNotification`.
@@ -328,7 +349,22 @@ export type PaymentIntent = {
     /** Present (true) when the payment also allows paying from an exchange. */
     exchange?: boolean;
     exchangeToleranceBps?: number;
+    /** 2 when created with `contractVersion: 2`. */
+    contractVersion?: 2;
+    /** The fee split in base units, when the API states it. v2 adds the registry rate and any scheduled change. */
+    fees?: PaymentFees;
     raw: Record<string, unknown>;
+};
+export type PaymentFees = {
+    paymentFeeUnits: string;
+    fixedNetworkFeeUnits: string;
+    merchantNetUnits: string;
+    /** v2 only. */
+    feeBps?: number;
+    partnerRate?: boolean;
+    /** v2 only, when the registry has a change scheduled: the nearest one, and all of them. */
+    pendingChange?: PendingFeeChange;
+    pendingChanges?: PendingFeeChange[];
 };
 /** The authoritative terms a checkout should display, read back from an intent. */
 export type ResolvedPayment = {
@@ -342,7 +378,10 @@ export type ResolvedPayment = {
     expiresAt: number;
     /** How many confirmations a verify will wait for; null when the API leaves it to its default. */
     confirmationsRequired: number | null;
-    gasPaymentMode: GasPaymentMode;
+    /** `auto` only on a v2 payment created with it. */
+    gasPaymentMode: GasPaymentMode | 'auto';
+    /** 2 for a v2 payment. */
+    contractVersion?: 2;
     /** Present only in `payment_token` mode: what the buyer will pay for the network, and until when. */
     networkFeeQuote?: NetworkFeeQuote;
     /** Present when the payment carries a return URL. */
@@ -537,6 +576,8 @@ export type PaymentVerification = {
     code: ChargeStatus;
     /** Local guidance for the code: WAIT means poll the same hash, INVALID_REQUEST means stop. */
     action: MerchantAction;
+    /** Extra detail where the API gives one, e.g. `UNRELATED_SETTLEMENT_SAME_REFERENCE` with `INVALID_REFERENCE`. */
+    reason?: string;
     raw: Record<string, unknown>;
 };
 /** Terms for a subscription: USDC per period, period length in seconds, optional end (unix). */
@@ -575,6 +616,8 @@ export type SubscriptionTerms = {
      * public id) and `p2flux_status` (`authorized` | `approval_needed` | `expired`). It proves nothing: act on the webhook.
      */
     returnUrl?: string;
+    /** Optional: 2 uses RecurringV2 (renewal fee from the fee registry, at least 1 USDC per period). Omit for v1. */
+    contractVersion?: ContractVersion;
 };
 export type SubscriptionSetup = {
     /** Signed setup token. Put it in the checkout link fragment: `#/subscribe/<setup_token>`. */
@@ -596,6 +639,11 @@ export type SubscriptionSetup = {
     merchantRef?: string;
     /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
     merchantRefVerified?: boolean;
+    /** v2 only: 2, the registry's renewal fee, and any fee change it has scheduled. */
+    contractVersion?: 2;
+    feeBps?: number;
+    pendingChange?: PendingFeeChange;
+    pendingChanges?: PendingFeeChange[];
     raw: Record<string, unknown>;
 };
 /** The authoritative terms plus the exact EIP-712 payload the customer's wallet signs. */
@@ -617,6 +665,8 @@ export type ResolvedSubscription = {
     networkFeeEstimate: string | null;
     expiresAt: number;
     typedData: Record<string, unknown>;
+    /** 2 for a RecurringV2 setup (its `typedData` domain is "P2FluxRecurring" version "2"). */
+    contractVersion?: 2;
     /** Only when resolved in `payment_token` mode: what the customer signs instead of approving. */
     sponsorship?: SubscriptionSponsorship;
     /** Present when created with `merchantRef`. */
@@ -921,8 +971,13 @@ export declare function createP2Flux(options: P2FluxOptions): {
      * recovery and refunds all start from it.
      */
     createPayment(terms: PaymentTerms): Promise<PaymentIntent>;
-    /** The authoritative terms for a checkout to display, read back from the intent itself. */
-    resolvePayment(intent: string): Promise<ResolvedPayment>;
+    /**
+     * The authoritative terms for a checkout to display, read back from the intent itself.
+     * `sponsored: true` (v2 `auto` payments only, buyer without ETH) also prices the sponsored payment.
+     */
+    resolvePayment(intent: string, options?: {
+        sponsored?: boolean;
+    }): Promise<ResolvedPayment>;
     /**
      * The buyer chose to pay from an exchange: the exact amount (price plus unique cents), the seller's
      * address and the window. Asking again returns the same order. Only for a payment made with `exchange`.
@@ -1238,8 +1293,13 @@ export declare function createP2Flux(options: P2FluxOptions): {
     } | {
         manage: string;
     }, eventId: string): Promise<Record<string, unknown>>;
-    /** Calldata that removes the token allowance entirely - stops every P2Flux subscription. */
-    prepareAllowanceRevocation(): Promise<PreparedTransaction>;
+    /**
+     * Calldata that removes the token allowance entirely - stops every P2Flux subscription.
+     * `contractVersion: 2` removes the allowance given to RecurringV2 instead (v2 subscriptions).
+     */
+    prepareAllowanceRevocation(options?: {
+        contractVersion?: ContractVersion;
+    }): Promise<PreparedTransaction>;
     /**
      * Answer a webhook from P2Flux (the body of the POST to your `notifyUrl`, as a string or parsed).
      *

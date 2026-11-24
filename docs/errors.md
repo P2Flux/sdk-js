@@ -22,6 +22,7 @@ code.
 | `action: 'RETRY_LATER'` | Nothing was spent. Retry the identical call later, on a bounded schedule. Honour `retryAfter` on 429s. |
 | `RATE_LIMITED` on a payment whose network fee is paid in USDC | The buyer wallet reached its sponsored-transaction limit (10 per rolling hour, 20 per rolling day, across all merchants). Nothing was spent. Retry after `retryAfter`, or let the buyer pay the network fee with ETH. |
 | `NOT_DUE` | Retry at `nextPeriodAt`, not before. |
+| `AMOUNT_BELOW_FEES` (v2 subscriptions) | At today's fee-registry rates the amount no longer covers the fees, so P2Flux cannot run the charge. The subscription is still valid: raise the price or have the payer sign again. |
 | `action: 'CUSTOMER_ACTION_REQUIRED'` | `INSUFFICIENT_BALANCE`: bounded dunning. `INSUFFICIENT_ALLOWANCE`: the approve flow; retrying alone cannot fix it. |
 | `action: 'STOP_SUBSCRIPTION'` | Stop billing. The customer must authorize again to resume. |
 | `action: 'INVALID_REQUEST'` | Do not retry. Fix the stored reference or the request. |
@@ -128,6 +129,7 @@ untouched.** Retry later on a bounded schedule; there is nothing for the custome
 |---|---|---|
 | `ALREADY_CHARGED` | `charge()` | Success. The period is collected. No `txHash` — [recover it](recovery.md#a-lost-recurring-charge) to attribute or refund it. |
 | `PAYMENT_ALREADY_PROCESSED` | one-time payments | The intent is settled. Verify it rather than creating another. |
+| `SETTLED_ELSEWHERE` | one-time payments (contracts v2) | These exact terms were settled through another P2Flux contract. Not paid here: treat it as a duplicate or unrelated settlement. |
 | `ALREADY_SETTLED` | sponsored operations | A repeat of a request that already worked. Not an error. |
 
 The mistake to avoid is treating any of these as a failure and issuing a second operation.
@@ -149,7 +151,7 @@ unknown maps to `RETRY_LATER`.
 | `RETRY_LATER` | `PAYMENT_NOT_FOUND`, `PAYMENT_RECOVERY_INCONSISTENT`, `RECOVERY_UNAVAILABLE`, `NOT_DUE`, `RPC_ERROR`, `RELAYER_ERROR`, `TRANSACTION_REVERTED`, `INTERNAL_ERROR`, `NETWORK_ERROR`, `RATE_LIMITED`, `CONCURRENCY_LIMIT`, `GAS_TOO_HIGH`, `GAS_QUOTE_UNAVAILABLE`, `GAS_FEE_TOO_HIGH`, `RELAYER_TX_COST_TOO_HIGH`, `RELAYER_BUDGET_EXCEEDED`, `RELAYER_NOT_READY`, `RPC_BUSY`, `TRANSACTION_NOT_FOUND`, `PAYMENT_TOKEN_GAS_UNAVAILABLE`, `PAYMENT_TOKEN_GAS_LIMIT_EXCEEDED`, `SPONSORED_TRANSACTION_FAILED`, `SPONSORED_PERMIT_FAILED` |
 | `CUSTOMER_ACTION_REQUIRED` | `INSUFFICIENT_BALANCE`, `INSUFFICIENT_ALLOWANCE`, `SIGNATURE_VALIDATION_TOO_EXPENSIVE`, `PAYMENT_TOKEN_GAS_QUOTE_EXPIRED`, `INSUFFICIENT_PAYMENT_TOKEN_FOR_GAS` |
 | `STOP_SUBSCRIPTION` | `PERMISSION_REVOKED`, `SUBSCRIPTION_EXPIRED`, `PAYER_SANCTIONED` |
-| `INVALID_REQUEST` | `REFUND_AMOUNT_INVALID`, `REFUND_WRONG_MERCHANT`, `REFUND_TRANSACTION_MISMATCH`, `REFUND_ORIGINAL_PAYMENT_INVALID`, `INVALID_REFUND_TOKEN`, `REFUND_TOKEN_EXPIRED`, `INVALID_SUBSCRIPTION`, `INVALID_REQUEST`, `AMOUNT_OUT_OF_BOUNDS`, `PERIOD_OUT_OF_BOUNDS`, `INVALID_INTENT`, `INTENT_EXPIRED`, `INVALID_REFERENCE`, `INVALID_SETUP_TOKEN`, `SETUP_TOKEN_EXPIRED`, `INVALID_CANCEL_TOKEN`, `CANCEL_TOKEN_EXPIRED`, `TERMS_MISMATCH`, `PERMISSION_NOT_FOUND`, `INVALID_SIGNATURE`, `UNSUPPORTED_SIGNATURE_FORMAT`, `WRONG_SPENDER`, `WRONG_TOKEN`, `INVALID_EXTRA_DATA`, `PAYMENT_ALREADY_PROCESSED`, `PAYMENT_TOKEN_GAS_UNSUPPORTED`, `INVALID_GAS_QUOTE`, `INVALID_LINK`, `LINK_EXPIRED`, `LINK_UNAVAILABLE`, `ALREADY_SUBSCRIBED`, `RECIPIENT_SANCTIONED`, `WEBHOOK_SIGNATURE_INVALID`, `WEBHOOK_TOO_OLD` |
+| `INVALID_REQUEST` | `REFUND_AMOUNT_INVALID`, `REFUND_WRONG_MERCHANT`, `REFUND_TRANSACTION_MISMATCH`, `REFUND_ORIGINAL_PAYMENT_INVALID`, `INVALID_REFUND_TOKEN`, `REFUND_TOKEN_EXPIRED`, `INVALID_SUBSCRIPTION`, `INVALID_REQUEST`, `AMOUNT_OUT_OF_BOUNDS`, `PERIOD_OUT_OF_BOUNDS`, `INVALID_INTENT`, `INTENT_EXPIRED`, `INVALID_REFERENCE`, `INVALID_SETUP_TOKEN`, `SETUP_TOKEN_EXPIRED`, `INVALID_CANCEL_TOKEN`, `CANCEL_TOKEN_EXPIRED`, `TERMS_MISMATCH`, `PERMISSION_NOT_FOUND`, `INVALID_SIGNATURE`, `UNSUPPORTED_SIGNATURE_FORMAT`, `WRONG_SPENDER`, `WRONG_TOKEN`, `INVALID_EXTRA_DATA`, `PAYMENT_ALREADY_PROCESSED`, `SETTLED_ELSEWHERE`, `AMOUNT_BELOW_FEES`, `PAYMENT_TOKEN_GAS_UNSUPPORTED`, `INVALID_GAS_QUOTE`, `INVALID_LINK`, `LINK_EXPIRED`, `LINK_UNAVAILABLE`, `ALREADY_SUBSCRIBED`, `RECIPIENT_SANCTIONED`, `WEBHOOK_SIGNATURE_INVALID`, `WEBHOOK_TOO_OLD` |
 
 The authoritative catalogue with per-code guidance is the
 [errors page](https://p2flux.com/docs/errors.html).
