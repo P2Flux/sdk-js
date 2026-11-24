@@ -378,6 +378,15 @@ export type PaymentTerms = {
    * it (`referenceSalt`, `checkMerchantRef`). Needs an API with merchant_ref (older ones refuse it).
    */
   merchantRef?: string
+  /**
+   * Optional: also let the buyer pay from an exchange (withdraw USDC on Base straight to `recipient`, the
+   * price plus unique cents). The amount may have at most 2 decimals. Needs the recipient's opt-in
+   * (`setExchangeSeller`) or a merchant token / partner key, else `EXCHANGE_NOT_ENABLED`. Confirm such a
+   * payment with `exchangePaymentStatus`, not `verifyPayment` (there is no single transaction).
+   */
+  exchange?: boolean
+  /** With `exchange`: how much less than the exact amount still counts once the seller accepts it, 0-500 bps. */
+  exchangeToleranceBps?: number
 }
 
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
@@ -454,6 +463,9 @@ export type PaymentIntent = {
   /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
   merchantRefVerified?: boolean
   referenceSalt?: string
+  /** Present (true) when the payment also allows paying from an exchange. */
+  exchange?: boolean
+  exchangeToleranceBps?: number
   raw: Record<string, unknown>
 }
 
@@ -480,6 +492,11 @@ export type ResolvedPayment = {
   merchantRef?: string
   /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
   merchantRefVerified?: boolean
+  /** Present (true) when the payment also allows paying from an exchange. */
+  exchange?: boolean
+  exchangeToleranceBps?: number
+  /** Present (true) once an exchange transfer was seen: show that state, never offer a wallet payment too. */
+  exchangeStarted?: boolean
   raw: Record<string, unknown>
 }
 
@@ -502,6 +519,39 @@ export type SponsoredPaymentResult = {
  * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
  * did not publish carries the last published day's rates, named in `rateDate`.
  */
+/**
+ * An exchange payment as P2Flux records it (`startExchangePayment`, `exchangePaymentStatus`,
+ * `acceptExchangePayment`). `paid` and `overpaid` are final; `late` waits for the seller's decision.
+ */
+export type ExchangePaymentStatus = 'none' | 'waiting' | 'confirming' | 'paid' | 'overpaid' | 'underpaid' | 'late' | 'expired'
+export type ExchangePayment = {
+  reference: string
+  status: ExchangePaymentStatus
+  chainId?: number
+  token?: string
+  /** The seller's own address: where the buyer sends. */
+  recipient?: string
+  /** Exactly what must arrive: the price plus the unique cents. */
+  amount?: string
+  amountUnits?: string
+  priceUnits?: string
+  toleranceBps?: number
+  /** End of the window, unix seconds. */
+  expiresAt?: number
+  receivedUnits?: string
+  missingUnits?: string
+  extraUnits?: string
+  confirmationsRequired: number | null
+  txHashes: string[]
+  /** Other amounts seen at the seller's address while the order was open. Never counted unless accepted. */
+  possible: { amount: string; amountUnits: string; at: number }[]
+  /** End of the late watch, unix seconds. */
+  watchUntil?: number
+  raw: Record<string, unknown>
+}
+export type ExchangeOptInAction = 'enable' | 'disable'
+export type ExchangeSeller = { wallet: string; exchangeEnabled: boolean; raw: Record<string, unknown> }
+
 /** From `createMerchantToken()`: send `merchantToken` as `createP2Flux({ merchantToken })`. */
 export type MerchantToken = { merchantToken: string; wallet: string; expiresAt: number; raw: Record<string, unknown> }
 
@@ -1197,6 +1247,55 @@ export function merchantTokenMessage(chainId: number, wallet: string, issuedAt: 
   ].join('\n')
 }
 
+/**
+ * The exact text a receiving wallet signs (`personal_sign`) for `setExchangeSeller()`: turns "Pay from an
+ * exchange" on or off. `issuedAt` unix seconds, at most 5 minutes old and newer than the last one accepted.
+ */
+export function exchangeOptInMessage(chainId: number, wallet: string, action: ExchangeOptInAction, issuedAt: number, apiUrl: string): string {
+  return [
+    `P2Flux: ${action} exchange payments`,
+    '',
+    action === 'enable'
+      ? 'Buyers may pay this wallet by withdrawing USDC from an exchange. It moves no funds and approves nothing.'
+      : 'Buyers may no longer pay this wallet from an exchange. It moves no funds and approves nothing.',
+    '',
+    `Wallet: ${wallet.toLowerCase()}`,
+    `API: ${new URL(apiUrl).origin}`,
+    `Chain ID: ${chainId}`,
+    `Issued at: ${issuedAt}`,
+  ].join('\n')
+}
+
+const exchangePayment = (body: Record<string, unknown>): ExchangePayment => {
+  const opt = <T>(k: string, name: string) => (body[k] === undefined ? {} : { [name]: body[k] as T })
+  return {
+    reference: body.reference as string,
+    status: (body.status ?? 'none') as ExchangePaymentStatus,
+    ...opt<number>('chain_id', 'chainId'),
+    ...opt<string>('token', 'token'),
+    ...opt<string>('recipient', 'recipient'),
+    ...opt<string>('amount', 'amount'),
+    ...opt<string>('amount_units', 'amountUnits'),
+    ...opt<string>('price_units', 'priceUnits'),
+    ...opt<number>('tolerance_bps', 'toleranceBps'),
+    ...opt<number>('expires_at', 'expiresAt'),
+    ...opt<string>('received_units', 'receivedUnits'),
+    ...opt<string>('missing_units', 'missingUnits'),
+    ...opt<string>('extra_units', 'extraUnits'),
+    ...opt<number>('watch_until', 'watchUntil'),
+    confirmationsRequired: (body.confirmations_required ?? null) as number | null,
+    txHashes: (body.tx_hashes ?? []) as string[],
+    possible: ((body.possible ?? []) as Record<string, unknown>[]).map((p) => ({
+      amount: p.amount as string, amountUnits: p.amount_units as string, at: p.at as number,
+    })),
+    raw: body,
+  }
+}
+const exchangeEcho = (body: Record<string, unknown>) => ({
+  ...(body.exchange === true ? { exchange: true } : {}),
+  ...(typeof body.exchange_tolerance_bps === 'number' ? { exchangeToleranceBps: body.exchange_tolerance_bps } : {}),
+})
+
 const hexBytes = (hex: string) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16))
 
 /**
@@ -1426,6 +1525,8 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
         ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
         ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
+        ...(terms.exchange === undefined ? {} : { exchange: terms.exchange }),
+        ...(terms.exchangeToleranceBps === undefined ? {} : { exchange_tolerance_bps: terms.exchangeToleranceBps }),
       })
       const pay = (body.pay ?? {}) as Record<string, unknown>
       return {
@@ -1446,6 +1547,7 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
         ...(body.checkout_url ? { checkoutUrl: body.checkout_url as string } : {}),
         ...merchantRefOf(body),
+        ...exchangeEcho(body),
         raw: body,
       }
     },
@@ -1470,8 +1572,54 @@ export function createP2Flux(options: P2FluxOptions) {
         ...(body.return_url ? { returnUrl: body.return_url as string } : {}),
         ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' as const } : {}),
         ...refEcho(body),
+        ...exchangeEcho(body),
+        ...(body.exchange_started === true ? { exchangeStarted: true } : {}),
         raw: body,
       }
+    },
+
+    /**
+     * The buyer chose to pay from an exchange: the exact amount (price plus unique cents), the seller's
+     * address and the window. Asking again returns the same order. Only for a payment made with `exchange`.
+     */
+    async startExchangePayment(intent: string): Promise<ExchangePayment> {
+      return exchangePayment(await postOrThrow('/v1/payments/exchange', { intent }))
+    },
+
+    /**
+     * Where an exchange payment stands, from P2Flux's record (no chain read). The way to confirm an
+     * exchange webhook (`data.exchange` true): fulfil on `paid` or `overpaid` only.
+     */
+    async exchangePaymentStatus(intent: string): Promise<ExchangePayment> {
+      return exchangePayment(await postOrThrow('/v1/payments/exchange/status', { intent }))
+    },
+
+    /**
+     * Seller only (`merchantToken` for the receiving wallet, or `partnerKey`): count a possible payment
+     * (from `payment.possible`), or a late one, for this order. Refused once the order is paid.
+     */
+    async acceptExchangePayment(args: { intent: string; txHash: string; logIndex: number }): Promise<ExchangePayment> {
+      return exchangePayment(await postOrThrow('/v1/payments/exchange/accept', { intent: args.intent, tx_hash: args.txHash, log_index: args.logIndex }))
+    },
+
+    /**
+     * Turn "Pay from an exchange" on or off for a receiving wallet: sign `exchangeOptInMessage(...)` with
+     * it, or omit `signature` / `issuedAt` when this client carries a `merchantToken` for that wallet.
+     */
+    async setExchangeSeller(args: { wallet: string; action: ExchangeOptInAction; issuedAt?: number; signature?: string }): Promise<ExchangeSeller> {
+      const body = await postOrThrow('/v1/exchange/sellers', {
+        wallet: args.wallet,
+        action: args.action,
+        ...(args.issuedAt === undefined ? {} : { issued_at: args.issuedAt }),
+        ...(args.signature === undefined ? {} : { signature: args.signature }),
+      })
+      return { wallet: body.wallet as string, exchangeEnabled: body.exchange_enabled === true, raw: body }
+    },
+
+    /** Whether "Pay from an exchange" is on for a wallet. Public, no chain read. */
+    async exchangeSellerStatus(wallet: string): Promise<ExchangeSeller> {
+      const body = await postOrThrow('/v1/exchange/sellers/status', { wallet })
+      return { wallet: body.wallet as string, exchangeEnabled: body.exchange_enabled === true, raw: body }
     },
 
     /**

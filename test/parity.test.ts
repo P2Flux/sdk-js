@@ -50,6 +50,12 @@ const REQUIRED_OPERATIONS = [
   '/v1/merchant-token',
   // ECB exchange rates for statements.
   '/v1/rates',
+  // Pay from an exchange.
+  '/v1/payments/exchange',
+  '/v1/payments/exchange/status',
+  '/v1/payments/exchange/accept',
+  '/v1/exchange/sellers',
+  '/v1/exchange/sellers/status',
 ]
 
 test('every public V1 merchant operation is reachable through the SDK', async () => {
@@ -97,6 +103,11 @@ test('every public V1 merchant operation is reachable through the SDK', async ()
   await p2flux.redeliverWebhook({ manage: 'p2lm1.x' }, 'evt_1')
   await p2flux.createMerchantToken({ wallet: '0x' + '33'.repeat(20), signature: '0x00', issuedAt: 1 })
   await p2flux.rates({ from: '2026-10-01', to: '2026-10-31' })
+  await p2flux.startExchangePayment('p2f1.x')
+  await p2flux.exchangePaymentStatus('p2f1.x')
+  await p2flux.acceptExchangePayment({ intent: 'p2f1.x', txHash: HASH, logIndex: 0 })
+  await p2flux.setExchangeSeller({ wallet: '0x' + '33'.repeat(20), action: 'enable', issuedAt: 1, signature: '0x00' })
+  await p2flux.exchangeSellerStatus('0x' + '33'.repeat(20))
 
   assert.deepEqual([...seen].sort(), [...REQUIRED_OPERATIONS].sort())
 })

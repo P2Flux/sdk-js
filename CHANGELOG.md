@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0 - unreleased
+
+### Added
+
+- **Pay from an exchange.** `exchange` and `exchangeToleranceBps` on `createPayment` (read back as
+  `exchange` / `exchangeToleranceBps`; `resolvePayment` adds `exchangeStarted`). New methods
+  `startExchangePayment(intent)`, `exchangePaymentStatus(intent)`, `acceptExchangePayment({ intent, txHash,
+  logIndex })` (seller: merchant token or partner key), `setExchangeSeller({ wallet, action, issuedAt?,
+  signature? })`, `exchangeSellerStatus(wallet)` and `exchangeOptInMessage(chainId, wallet, action, issuedAt,
+  apiUrl)`. Confirm an exchange payment with `exchangePaymentStatus`; `handleNotification` still verifies by
+  transaction and does not confirm exchange events yet.
+
+All additive; needs an API with exchange payments (an older one refuses `exchange`).
+
 ## 0.15.0 - 2026-11-04
 
 ### Added

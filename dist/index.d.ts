@@ -243,6 +243,15 @@ export type PaymentTerms = {
      * it (`referenceSalt`, `checkMerchantRef`). Needs an API with merchant_ref (older ones refuse it).
      */
     merchantRef?: string;
+    /**
+     * Optional: also let the buyer pay from an exchange (withdraw USDC on Base straight to `recipient`, the
+     * price plus unique cents). The amount may have at most 2 decimals. Needs the recipient's opt-in
+     * (`setExchangeSeller`) or a merchant token / partner key, else `EXCHANGE_NOT_ENABLED`. Confirm such a
+     * payment with `exchangePaymentStatus`, not `verifyPayment` (there is no single transaction).
+     */
+    exchange?: boolean;
+    /** With `exchange`: how much less than the exact amount still counts once the seller accepts it, 0-500 bps. */
+    exchangeToleranceBps?: number;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -316,6 +325,9 @@ export type PaymentIntent = {
     /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
     merchantRefVerified?: boolean;
     referenceSalt?: string;
+    /** Present (true) when the payment also allows paying from an exchange. */
+    exchange?: boolean;
+    exchangeToleranceBps?: number;
     raw: Record<string, unknown>;
 };
 /** The authoritative terms a checkout should display, read back from an intent. */
@@ -341,6 +353,11 @@ export type ResolvedPayment = {
     merchantRef?: string;
     /** With merchantRef on an API that sends it: true only when the creator proved control of the receiving wallet (merchant token or partner key). Anyone can create a payment to any wallet with any merchantRef. */
     merchantRefVerified?: boolean;
+    /** Present (true) when the payment also allows paying from an exchange. */
+    exchange?: boolean;
+    exchangeToleranceBps?: number;
+    /** Present (true) once an exchange transfer was seen: show that state, never offer a wallet payment too. */
+    exchangeStarted?: boolean;
     raw: Record<string, unknown>;
 };
 /** The result of asking P2Flux to settle a payment the buyer funded with a signature. */
@@ -361,6 +378,46 @@ export type SponsoredPaymentResult = {
  * ECB euro reference rates (`rates()`): units of USD and GBP per 1 EUR, per calendar day. A day the ECB
  * did not publish carries the last published day's rates, named in `rateDate`.
  */
+/**
+ * An exchange payment as P2Flux records it (`startExchangePayment`, `exchangePaymentStatus`,
+ * `acceptExchangePayment`). `paid` and `overpaid` are final; `late` waits for the seller's decision.
+ */
+export type ExchangePaymentStatus = 'none' | 'waiting' | 'confirming' | 'paid' | 'overpaid' | 'underpaid' | 'late' | 'expired';
+export type ExchangePayment = {
+    reference: string;
+    status: ExchangePaymentStatus;
+    chainId?: number;
+    token?: string;
+    /** The seller's own address: where the buyer sends. */
+    recipient?: string;
+    /** Exactly what must arrive: the price plus the unique cents. */
+    amount?: string;
+    amountUnits?: string;
+    priceUnits?: string;
+    toleranceBps?: number;
+    /** End of the window, unix seconds. */
+    expiresAt?: number;
+    receivedUnits?: string;
+    missingUnits?: string;
+    extraUnits?: string;
+    confirmationsRequired: number | null;
+    txHashes: string[];
+    /** Other amounts seen at the seller's address while the order was open. Never counted unless accepted. */
+    possible: {
+        amount: string;
+        amountUnits: string;
+        at: number;
+    }[];
+    /** End of the late watch, unix seconds. */
+    watchUntil?: number;
+    raw: Record<string, unknown>;
+};
+export type ExchangeOptInAction = 'enable' | 'disable';
+export type ExchangeSeller = {
+    wallet: string;
+    exchangeEnabled: boolean;
+    raw: Record<string, unknown>;
+};
 /** From `createMerchantToken()`: send `merchantToken` as `createP2Flux({ merchantToken })`. */
 export type MerchantToken = {
     merchantToken: string;
@@ -819,6 +876,11 @@ export declare const MERCHANT_REF: RegExp;
  */
 export declare function merchantTokenMessage(chainId: number, wallet: string, issuedAt: number, apiUrl: string): string;
 /**
+ * The exact text a receiving wallet signs (`personal_sign`) for `setExchangeSeller()`: turns "Pay from an
+ * exchange" on or off. `issuedAt` unix seconds, at most 5 minutes old and newer than the last one accepted.
+ */
+export declare function exchangeOptInMessage(chainId: number, wallet: string, action: ExchangeOptInAction, issuedAt: number, apiUrl: string): string;
+/**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
  * `reference == keccak256("p2flux.merchant_ref.v1" || salt || merchantRef)`, computed here with no
  * call to P2Flux - so you, or an auditor you hand the salt to, can prove the payment on chain was
@@ -861,6 +923,37 @@ export declare function createP2Flux(options: P2FluxOptions): {
     createPayment(terms: PaymentTerms): Promise<PaymentIntent>;
     /** The authoritative terms for a checkout to display, read back from the intent itself. */
     resolvePayment(intent: string): Promise<ResolvedPayment>;
+    /**
+     * The buyer chose to pay from an exchange: the exact amount (price plus unique cents), the seller's
+     * address and the window. Asking again returns the same order. Only for a payment made with `exchange`.
+     */
+    startExchangePayment(intent: string): Promise<ExchangePayment>;
+    /**
+     * Where an exchange payment stands, from P2Flux's record (no chain read). The way to confirm an
+     * exchange webhook (`data.exchange` true): fulfil on `paid` or `overpaid` only.
+     */
+    exchangePaymentStatus(intent: string): Promise<ExchangePayment>;
+    /**
+     * Seller only (`merchantToken` for the receiving wallet, or `partnerKey`): count a possible payment
+     * (from `payment.possible`), or a late one, for this order. Refused once the order is paid.
+     */
+    acceptExchangePayment(args: {
+        intent: string;
+        txHash: string;
+        logIndex: number;
+    }): Promise<ExchangePayment>;
+    /**
+     * Turn "Pay from an exchange" on or off for a receiving wallet: sign `exchangeOptInMessage(...)` with
+     * it, or omit `signature` / `issuedAt` when this client carries a `merchantToken` for that wallet.
+     */
+    setExchangeSeller(args: {
+        wallet: string;
+        action: ExchangeOptInAction;
+        issuedAt?: number;
+        signature?: string;
+    }): Promise<ExchangeSeller>;
+    /** Whether "Pay from an exchange" is on for a wallet. Public, no chain read. */
+    exchangeSellerStatus(wallet: string): Promise<ExchangeSeller>;
     /**
      * Settle a payment whose buyer holds no native currency.
      *

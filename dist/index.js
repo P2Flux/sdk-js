@@ -261,6 +261,53 @@ export function merchantTokenMessage(chainId, wallet, issuedAt, apiUrl) {
         `Issued at: ${issuedAt}`,
     ].join('\n');
 }
+/**
+ * The exact text a receiving wallet signs (`personal_sign`) for `setExchangeSeller()`: turns "Pay from an
+ * exchange" on or off. `issuedAt` unix seconds, at most 5 minutes old and newer than the last one accepted.
+ */
+export function exchangeOptInMessage(chainId, wallet, action, issuedAt, apiUrl) {
+    return [
+        `P2Flux: ${action} exchange payments`,
+        '',
+        action === 'enable'
+            ? 'Buyers may pay this wallet by withdrawing USDC from an exchange. It moves no funds and approves nothing.'
+            : 'Buyers may no longer pay this wallet from an exchange. It moves no funds and approves nothing.',
+        '',
+        `Wallet: ${wallet.toLowerCase()}`,
+        `API: ${new URL(apiUrl).origin}`,
+        `Chain ID: ${chainId}`,
+        `Issued at: ${issuedAt}`,
+    ].join('\n');
+}
+const exchangePayment = (body) => {
+    const opt = (k, name) => (body[k] === undefined ? {} : { [name]: body[k] });
+    return {
+        reference: body.reference,
+        status: (body.status ?? 'none'),
+        ...opt('chain_id', 'chainId'),
+        ...opt('token', 'token'),
+        ...opt('recipient', 'recipient'),
+        ...opt('amount', 'amount'),
+        ...opt('amount_units', 'amountUnits'),
+        ...opt('price_units', 'priceUnits'),
+        ...opt('tolerance_bps', 'toleranceBps'),
+        ...opt('expires_at', 'expiresAt'),
+        ...opt('received_units', 'receivedUnits'),
+        ...opt('missing_units', 'missingUnits'),
+        ...opt('extra_units', 'extraUnits'),
+        ...opt('watch_until', 'watchUntil'),
+        confirmationsRequired: (body.confirmations_required ?? null),
+        txHashes: (body.tx_hashes ?? []),
+        possible: (body.possible ?? []).map((p) => ({
+            amount: p.amount, amountUnits: p.amount_units, at: p.at,
+        })),
+        raw: body,
+    };
+};
+const exchangeEcho = (body) => ({
+    ...(body.exchange === true ? { exchange: true } : {}),
+    ...(typeof body.exchange_tolerance_bps === 'number' ? { exchangeToleranceBps: body.exchange_tolerance_bps } : {}),
+});
 const hexBytes = (hex) => Uint8Array.from(hex.slice(2).match(/../g) ?? [], (h) => parseInt(h, 16));
 /**
  * Does this on-chain `reference` commit to your `merchantRef`? True exactly when
@@ -480,6 +527,8 @@ export function createP2Flux(options) {
                 ...(terms.returnUrl === undefined ? {} : { return_url: terms.returnUrl }),
                 ...(terms.privatePayment === undefined ? {} : { private_payment: terms.privatePayment }),
                 ...(terms.merchantRef === undefined ? {} : { merchant_ref: terms.merchantRef }),
+                ...(terms.exchange === undefined ? {} : { exchange: terms.exchange }),
+                ...(terms.exchangeToleranceBps === undefined ? {} : { exchange_tolerance_bps: terms.exchangeToleranceBps }),
             });
             const pay = (body.pay ?? {});
             return {
@@ -500,6 +549,7 @@ export function createP2Flux(options) {
                 ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
                 ...(body.checkout_url ? { checkoutUrl: body.checkout_url } : {}),
                 ...merchantRefOf(body),
+                ...exchangeEcho(body),
                 raw: body,
             };
         },
@@ -523,8 +573,49 @@ export function createP2Flux(options) {
                 ...(body.return_url ? { returnUrl: body.return_url } : {}),
                 ...(body.private_payment === 'hinkal' ? { privatePayment: 'hinkal' } : {}),
                 ...refEcho(body),
+                ...exchangeEcho(body),
+                ...(body.exchange_started === true ? { exchangeStarted: true } : {}),
                 raw: body,
             };
+        },
+        /**
+         * The buyer chose to pay from an exchange: the exact amount (price plus unique cents), the seller's
+         * address and the window. Asking again returns the same order. Only for a payment made with `exchange`.
+         */
+        async startExchangePayment(intent) {
+            return exchangePayment(await postOrThrow('/v1/payments/exchange', { intent }));
+        },
+        /**
+         * Where an exchange payment stands, from P2Flux's record (no chain read). The way to confirm an
+         * exchange webhook (`data.exchange` true): fulfil on `paid` or `overpaid` only.
+         */
+        async exchangePaymentStatus(intent) {
+            return exchangePayment(await postOrThrow('/v1/payments/exchange/status', { intent }));
+        },
+        /**
+         * Seller only (`merchantToken` for the receiving wallet, or `partnerKey`): count a possible payment
+         * (from `payment.possible`), or a late one, for this order. Refused once the order is paid.
+         */
+        async acceptExchangePayment(args) {
+            return exchangePayment(await postOrThrow('/v1/payments/exchange/accept', { intent: args.intent, tx_hash: args.txHash, log_index: args.logIndex }));
+        },
+        /**
+         * Turn "Pay from an exchange" on or off for a receiving wallet: sign `exchangeOptInMessage(...)` with
+         * it, or omit `signature` / `issuedAt` when this client carries a `merchantToken` for that wallet.
+         */
+        async setExchangeSeller(args) {
+            const body = await postOrThrow('/v1/exchange/sellers', {
+                wallet: args.wallet,
+                action: args.action,
+                ...(args.issuedAt === undefined ? {} : { issued_at: args.issuedAt }),
+                ...(args.signature === undefined ? {} : { signature: args.signature }),
+            });
+            return { wallet: body.wallet, exchangeEnabled: body.exchange_enabled === true, raw: body };
+        },
+        /** Whether "Pay from an exchange" is on for a wallet. Public, no chain read. */
+        async exchangeSellerStatus(wallet) {
+            const body = await postOrThrow('/v1/exchange/sellers/status', { wallet });
+            return { wallet: body.wallet, exchangeEnabled: body.exchange_enabled === true, raw: body };
         },
         /**
          * Settle a payment whose buyer holds no native currency.
