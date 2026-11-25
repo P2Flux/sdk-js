@@ -4,9 +4,12 @@
 # workflow that publishes on every push to main is a workflow that eventually publishes something
 # nobody meant to ship.
 #
-# There is no npm token. Publication uses npm's trusted publishing over GitHub OIDC, scoped on the
-# npm side to this repository and this workflow file, so the credential exists only for the seconds
-# this job runs and cannot be stolen from a secret store.
+# No npm token is stored here. Publication uses npm's trusted publishing over GitHub OIDC, so the
+# credential exists only for the seconds this job runs. That only works once the package's settings
+# on npmjs.com name this repository (P2Flux/sdk-js) and this workflow file (release.yml) as its
+# trusted publisher: until 25 Nov 2026 they did not, every run failed at the publish step (404) and
+# versions up to 0.15.0 were published by hand, without provenance. The last step fails the run if
+# the published version carries no provenance attestation.
 name: release
 
 on:
@@ -62,3 +65,13 @@ jobs:
       - run: npm pack --dry-run
 
       - run: npm publish --provenance --access public
+
+      - name: The published version carries a provenance attestation
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          for attempt in 1 2 3 4 5 6; do
+            if npm view "@p2flux/sdk@$VERSION" dist.attestations.url | grep -q '^https://'; then exit 0; fi
+            sleep 10
+          done
+          echo "@p2flux/sdk@$VERSION is on npm without a provenance attestation" >&2
+          exit 1
