@@ -1,15 +1,15 @@
-# Publishes @p2flux/sdk to npm when a GitHub Release is published.
+# Publishes @p2flux/sdk to npm when a GitHub Release is published - never on a push. A release is an
+# act of intent; a merge is not.
 #
-# Deliberately NOT triggered by a push. A release is an act of intent; a merge is not, and a
-# workflow that publishes on every push to main is a workflow that eventually publishes something
-# nobody meant to ship.
+# No npm token is stored: publication uses npm's trusted publishing over GitHub OIDC. That only works
+# because the package's settings on npmjs.com name this repository (P2Flux/sdk-js) and this workflow
+# file (release.yml) as its trusted publisher (set 25 Nov 2026; before that every run failed at the
+# publish step and versions up to 0.15.0 were published by hand, without provenance).
 #
-# No npm token is stored here. Publication uses npm's trusted publishing over GitHub OIDC, so the
-# credential exists only for the seconds this job runs. That only works once the package's settings
-# on npmjs.com name this repository (P2Flux/sdk-js) and this workflow file (release.yml) as its
-# trusted publisher: until 25 Nov 2026 they did not, every run failed at the publish step (404) and
-# versions up to 0.15.0 were published by hand, without provenance. The last step fails the run if
-# the published version carries no provenance attestation.
+# Two jobs, on purpose: everything that runs third-party code (dependency installs, tests, the build)
+# happens in `build`, which cannot ask for the OIDC token. `publish` alone can, and it runs no
+# dependency code at all - it publishes the tarball `build` packed. A compromised dependency therefore
+# cannot publish under our name. Actions are pinned to commit SHAs, npm to an exact version.
 name: release
 
 on:
@@ -18,26 +18,20 @@ on:
 
 permissions:
   contents: read
-  id-token: write # the OIDC token npm exchanges for publish rights
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
-      # npm's trusted publishing needs a recent CLI; the runner's bundled version may predate it.
-      - run: npm install -g npm@latest
+      # No install scripts: the only ones in the tree (esbuild, fsevents) are not needed to build or test.
+      - run: npm ci --no-audit --no-fund --ignore-scripts
 
-      - run: npm ci
-
-      # The tag is the source of truth for what is being released. A mismatch here means the tag and
-      # the manifest disagree, and publishing either one would be wrong.
       - name: The tag matches package.json
         run: |
           TAG="${GITHUB_REF_NAME#v}"
@@ -50,25 +44,51 @@ jobs:
       # The whole suite: client, surface, parity, dist integrity, examples, complete flow, docs.
       - run: npm test
       - run: npm run typecheck
+      - run: npm audit --omit=dev
 
-      # dist/ is committed because P2Flux/core pins this repository by commit. Rebuilding here and
-      # failing on any difference is what stops a stale dist from reaching the registry.
+      # dist/ is committed because P2Flux/core pins this repository by commit: a stale one must not
+      # reach the registry.
       - name: The build reproduces the committed dist
         run: |
           npm run build
-          if ! git diff --quiet -- dist; then
+          if [ -n "$(git status --porcelain -- dist)" ]; then
             echo "dist/ is stale - run npm run build and commit it" >&2
-            git --no-pager diff --stat -- dist
+            git status --porcelain -- dist
             exit 1
           fi
 
-      - run: npm pack --dry-run
+      - run: npm pack --ignore-scripts
 
-      - run: npm publish --provenance --access public
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: p2flux-sdk-*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm exchanges for publish rights - this job only
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer; exact version, not "latest".
+      - run: npm install -g npm@11.6.2 --ignore-scripts
+
+      - run: npm publish ./p2flux-sdk-*.tgz --provenance --access public
 
       - name: The published version carries a provenance attestation
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${GITHUB_REF_NAME#v}"
           for attempt in 1 2 3 4 5 6; do
             if npm view "@p2flux/sdk@$VERSION" dist.attestations.url | grep -q '^https://'; then exit 0; fi
             sleep 10
