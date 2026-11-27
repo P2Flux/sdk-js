@@ -989,7 +989,7 @@ export declare function createP2Flux(options: P2FluxOptions): {
      */
     exchangePaymentStatus(intent: string): Promise<ExchangePayment>;
     /**
-     * Seller only (`merchantToken` for the receiving wallet, or `partnerKey`): count a possible payment
+     * Seller only (`merchantToken` for the receiving wallet; a partner key is refused): count a possible payment
      * (from `payment.possible`), or a late one, for this order. Refused once the order is paid.
      */
     acceptExchangePayment(args: {
