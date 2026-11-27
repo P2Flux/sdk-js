@@ -230,6 +230,10 @@ export type PendingFeeChange = {
     partnerRate: boolean;
     effectiveAt: number;
 };
+/** How long a payment must sit on chain before it counts as paid: standard (~6 s), fast (<1 s), safe (~100 s). */
+export type ConfirmationLevel = 'standard' | 'fast' | 'safe';
+/** A link's fee mode: as a payment's, or `auto` (the buyer's wallet decides: ETH when it has some, else USDC) - the default for links the hosted page creates. */
+export type LinkGasPaymentMode = GasPaymentMode | 'auto';
 export type PaymentTerms = {
     recipient: string;
     amount: string;
@@ -273,6 +277,13 @@ export type PaymentTerms = {
     exchange?: boolean;
     /** With `exchange`: how much less than the exact amount still counts once the seller accepts it, 0-500 bps. */
     exchangeToleranceBps?: number;
+    /**
+     * Optional: how long the payment must sit on chain before it counts as paid. `standard` (default, about 6 s),
+     * `fast` (under 1 s: quicker, but a rare network reorg in that second could still undo it - use it where a mistake
+     * is cheap to reverse), `safe` (about 100 s: for high value). Signed into the payment; the buyer cannot change it.
+     * Needs an API with confirmation levels (older ones refuse the field).
+     */
+    confirmation?: ConfirmationLevel;
 };
 /** What one sponsored operation will cost the buyer, and how long the price stands. */
 export type NetworkFeeQuote = {
@@ -734,8 +745,8 @@ export type PaymentLinkTerms = {
     label?: string;
     /** Unix seconds. Default 7 days for an invoice, a year otherwise. */
     expiresAt?: number;
-    /** One-time kinds: the buyer pays the network fee in USDC (no ETH needed). Fixed for the link's life. */
-    gasPaymentMode?: GasPaymentMode;
+    /** One-time kinds: `payment_token` - the buyer pays the network fee in USDC (no ETH needed); `auto` - ETH when the wallet has some, else USDC (needs an API with auto links); omit for `native`. Fixed for the link's life. */
+    gasPaymentMode?: LinkGasPaymentMode;
     /** Subscriptions: seconds between charges, at least one day; the amount at least 1 USDC. */
     period?: number;
     /** Subscriptions: number of charges; omit for until cancelled. */
@@ -753,6 +764,8 @@ export type PaymentLinkTerms = {
     privatePayment?: 'hinkal';
     /** Your own order/invoice number (`MERCHANT_REF`: ASCII letters, digits and `. _ : / # -`, 1-64; signed, not encrypted - the buyer can read it, so never personal data). Needs an API with merchant_ref. */
     merchantRef?: string;
+    /** `once` and `reusable` links: as `PaymentTerms.confirmation`. Not for subscriptions (renewals always wait for the safe block). */
+    confirmation?: ConfirmationLevel;
 };
 /** A link's terms, as the API states them. */
 export type PaymentLinkTermsView = {
@@ -767,7 +780,9 @@ export type PaymentLinkTermsView = {
     createdAt: number;
     expiresAt: number;
     /** One-time kinds. */
-    gasPaymentMode?: GasPaymentMode;
+    gasPaymentMode?: LinkGasPaymentMode;
+    /** One-time kinds: the confirmation level the link was created with (APIs with confirmation levels). */
+    confirmation?: ConfirmationLevel;
     /** `once` / `reusable` links that offer "Pay privately with Hinkal". */
     privatePayment?: 'hinkal';
     /** Subscriptions. */
